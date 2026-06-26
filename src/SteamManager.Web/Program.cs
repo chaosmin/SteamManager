@@ -1,6 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using SteamManager.Core.Services;
+using SteamManager.Infrastructure.Http;
+using SteamManager.Infrastructure.Services;
 using SteamManager.Infrastructure.Persistence;
+using SteamManager.Infrastructure.Steam;
 using SteamManager.Web.Components;
 using SteamManager.Web.Middleware;
 
@@ -29,6 +33,19 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
     opt.UseMySql(connStr, ServerVersion.AutoDetect(connStr),
         mysql => mysql.EnableRetryOnFailure(3)));
 
+// Steam + Core services
+builder.Services.AddSingleton<SteamClientWrapper>();
+builder.Services.AddSingleton<AchievementHandler>();
+builder.Services.AddSingleton<ISteamSessionService, SteamSessionService>();
+builder.Services.AddSingleton<IGameIdleService, GameIdleService>();
+builder.Services.AddSingleton<IUnlockSchedulerService, UnlockSchedulerService>();
+builder.Services.AddScoped<IAchievementDataService, AchievementDataService>();
+builder.Services.AddScoped<StartupRecoveryService>();
+
+// HTTP clients
+builder.Services.AddHttpClient<SteamWebApiClient>();
+builder.Services.AddHttpClient<SteamHuntersClient>();
+
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -42,6 +59,13 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("SET time_zone = '+00:00'");
+}
+
+// Startup recovery (restore Steam session + resume running games)
+using (var scope = app.Services.CreateScope())
+{
+    var recovery = scope.ServiceProvider.GetRequiredService<StartupRecoveryService>();
+    await recovery.RecoverAsync();
 }
 
 app.UseMiddleware<UiAuthMiddleware>();

@@ -1,0 +1,36 @@
+@page "/"
+@inject AppDbContext Db
+@inject IGameIdleService IdleService
+@implements IDisposable
+@using SteamManager.Core.Services
+@using SteamManager.Infrastructure.Persistence
+@using SteamManager.Core.Models
+@using Microsoft.EntityFrameworkCore
+
+<h3>Dashboard</h3>
+
+@foreach (var game in _games)
+{
+    <div style="border:1px solid #ccc;margin:8px;padding:8px">
+        <strong>@game.Name</strong> — @(game.Progress?.AccumulatedMinutes ?? 0) / @((int)(game.TargetHours * 60)) min
+        <br/>Status: @game.Status
+    </div>
+}
+
+@code {
+    List<GameConfig> _games = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        IdleService.ProgressUpdated += OnProgress;
+        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+    }
+
+    void OnProgress(int appId, int minutes)
+    {
+        var game = _games.FirstOrDefault(g => g.AppId == appId);
+        if (game?.Progress != null) { game.Progress.AccumulatedMinutes = minutes; InvokeAsync(StateHasChanged); }
+    }
+
+    public void Dispose() => IdleService.ProgressUpdated -= OnProgress;
+}

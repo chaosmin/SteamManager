@@ -1,0 +1,72 @@
+@page "/games"
+@inject AppDbContext Db
+@inject IGameIdleService IdleService
+@inject IUnlockSchedulerService SchedulerService
+@inject NavigationManager Nav
+@using SteamManager.Core.Services
+@using SteamManager.Infrastructure.Persistence
+@using SteamManager.Core.Models
+@using Microsoft.EntityFrameworkCore
+
+<h3>Games</h3>
+
+<div>
+    <input @bind="_newAppId" placeholder="App ID" type="number" />
+    <input @bind="_newName" placeholder="Game name" />
+    <input @bind="_targetHours" placeholder="Target hours" type="number" />
+    <input type="checkbox" @bind="_enableAchievements" /> Achievements
+    <button @onclick="AddGame">Add</button>
+</div>
+
+@foreach (var game in _games)
+{
+    <div style="border:1px solid #ccc;margin:8px;padding:8px">
+        <strong>@game.Name</strong> (AppId: @game.AppId) — Status: @game.Status
+        @if (game.Status == GameStatus.Idle)
+        {
+            <button @onclick="() => StartGame(game.AppId)">Start</button>
+        }
+        else if (game.Status == GameStatus.Running)
+        {
+            <button @onclick="() => StopGame(game.AppId)">Stop</button>
+        }
+    </div>
+}
+
+@code {
+    List<GameConfig> _games = [];
+    int _newAppId; string _newName = ""; decimal _targetHours = 10; bool _enableAchievements = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+    }
+
+    async Task AddGame()
+    {
+        if (_newAppId == 0 || string.IsNullOrWhiteSpace(_newName)) return;
+        var game = new GameConfig
+        {
+            AppId = _newAppId, Name = _newName,
+            TargetHours = _targetHours, EnableAchievements = _enableAchievements
+        };
+        Db.GameConfigs.Add(game);
+        await Db.SaveChangesAsync();
+        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+    }
+
+    async Task StartGame(int appId)
+    {
+        await IdleService.StartAsync(appId);
+        var game = _games.First(g => g.AppId == appId);
+        if (game.EnableAchievements) await SchedulerService.StartAsync(appId);
+        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+    }
+
+    async Task StopGame(int appId)
+    {
+        await IdleService.StopAsync(appId);
+        await SchedulerService.StopAsync(appId);
+        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+    }
+}

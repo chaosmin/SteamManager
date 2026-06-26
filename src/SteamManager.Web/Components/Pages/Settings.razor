@@ -1,0 +1,88 @@
+@page "/settings"
+@inject ISteamSessionService Session
+@inject IConfiguration Config
+@inject AppDbContext Db
+@implements IDisposable
+@using SteamManager.Core.Services
+@using SteamManager.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+
+<h3>Settings</h3>
+
+<h4>Steam Account</h4>
+@if (Session.State == LoginState.LoggedIn)
+{
+    <p>Logged in as: <strong>@Session.DisplayName</strong></p>
+    <button @onclick="Logout">Logout</button>
+}
+else if (Session.State == LoginState.AwaitingTwoFactor)
+{
+    <input @bind="_twoFaCode" placeholder="2FA code" maxlength="5" />
+    <button @onclick="Submit2Fa">Submit</button>
+}
+else
+{
+    <input @bind="_username" placeholder="Steam username" />
+    <input type="password" @bind="_password" placeholder="Steam password" />
+    <button @onclick="Login">Login</button>
+}
+@if (_message != null) { <p>@_message</p> }
+
+<h4>Steam Web API Key</h4>
+<input @bind="_apiKey" placeholder="API key from steamcommunity.com/dev/apikey" style="width:400px" />
+<button @onclick="SaveApiKey">Save</button>
+
+<h4>Display Timezone</h4>
+<select @bind="_timezone">
+    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+    {
+        <option value="@tz.Id">@tz.DisplayName</option>
+    }
+</select>
+<button @onclick="SaveTimezone">Save</button>
+
+@code {
+    string _username = "", _password = "", _twoFaCode = "", _apiKey = "", _timezone = "UTC";
+    string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.StateChanged += StateHasChanged;
+        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync();
+        if (cfg != null) { _apiKey = cfg.WebApiKey ?? ""; _timezone = cfg.DisplayTimezone; }
+        else _timezone = Environment.GetEnvironmentVariable("TZ") ?? "UTC";
+    }
+
+    async Task Login()
+    {
+        _message = "Connecting...";
+        await Session.BeginLoginAsync(_username, _password);
+        _message = Session.State == LoginState.AwaitingTwoFactor ? "Enter 2FA code" : null;
+    }
+
+    async Task Submit2Fa()
+    {
+        var ok = await Session.SubmitTwoFactorCodeAsync(_twoFaCode);
+        _message = ok ? null : "Invalid code";
+    }
+
+    async Task Logout() { await Session.LogoutAsync(); _message = null; }
+
+    async Task SaveApiKey()
+    {
+        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamManager.Core.Models.SteamConfig();
+        cfg.WebApiKey = _apiKey;
+        if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
+        await Db.SaveChangesAsync();
+        _message = "API key saved";
+    }
+
+    async Task SaveTimezone()
+    {
+        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync();
+        if (cfg != null) { cfg.DisplayTimezone = _timezone; await Db.SaveChangesAsync(); }
+        _message = "Timezone saved";
+    }
+
+    public void Dispose() => Session.StateChanged -= StateHasChanged;
+}
