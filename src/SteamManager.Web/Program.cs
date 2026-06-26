@@ -1,23 +1,54 @@
+using Microsoft.EntityFrameworkCore;
+using Serilog;
+using SteamManager.Infrastructure.Persistence;
 using SteamManager.Web.Components;
+using SteamManager.Web.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Startup guard: SESSION_ENCRYPTION_KEY must be set
+var encKey = builder.Configuration["SESSION_ENCRYPTION_KEY"]
+    ?? Environment.GetEnvironmentVariable("SESSION_ENCRYPTION_KEY");
+if (string.IsNullOrWhiteSpace(encKey))
+    throw new InvalidOperationException(
+        "SESSION_ENCRYPTION_KEY is required. Set it as an environment variable (min 32 chars).");
+
+// Build connection string from env vars
+var dbHost = builder.Configuration["DB_HOST"] ?? Environment.GetEnvironmentVariable("DB_HOST") ?? "localhost";
+var dbPort = builder.Configuration["DB_PORT"] ?? Environment.GetEnvironmentVariable("DB_PORT") ?? "3306";
+var dbName = builder.Configuration["DB_NAME"] ?? Environment.GetEnvironmentVariable("DB_NAME") ?? "steam_manager";
+var dbUser = builder.Configuration["DB_USER"] ?? Environment.GetEnvironmentVariable("DB_USER") ?? "steam_mgr";
+var dbPass = builder.Configuration["DB_PASSWORD"] ?? Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "";
+var connStr = $"Server={dbHost};Port={dbPort};Database={dbName};User={dbUser};Password={dbPass};Convert Zero Datetime=True;AllowPublicKeyRetrieval=True;ConnectionTimeout=30;";
+
+// Serilog
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+// Database
+builder.Services.AddDbContext<AppDbContext>(opt =>
+    opt.UseMySql(connStr, ServerVersion.AutoDetect(connStr),
+        mysql => mysql.EnableRetryOnFailure(3)));
+
+// Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+builder.Services.AddHttpContextAccessor();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
+// Auto-migrate + force UTC session
+using (var scope = app.Services.CreateScope())
 {
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+    await db.Database.ExecuteSqlRawAsync("SET time_zone = '+00:00'");
 }
 
+app.UseMiddleware<UiAuthMiddleware>();
 app.UseStaticFiles();
 app.UseAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-app.Run();
+await app.RunAsync();
