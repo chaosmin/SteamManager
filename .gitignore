@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+publish/
+
+# Logs
+*.log
+logs/
+
+# Rider / JetBrains
+.idea/
+
+# macOS
+.DS_Store
