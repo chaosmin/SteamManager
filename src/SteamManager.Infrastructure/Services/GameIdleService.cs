@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamKit2;
 using SteamKit2.Internal;
@@ -11,7 +12,7 @@ namespace SteamManager.Infrastructure.Services;
 
 public class GameIdleService(
     SteamClientWrapper steam,
-    AppDbContext db,
+    IServiceScopeFactory scopeFactory,
     ILogger<GameIdleService> logger) : IGameIdleService
 {
     private readonly Dictionary<int, CancellationTokenSource> _running = [];
@@ -22,6 +23,9 @@ public class GameIdleService(
     public async Task StartAsync(int appId, CancellationToken ct = default)
     {
         if (_running.ContainsKey(appId)) return;
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var game = await db.GameConfigs.Include(g => g.Progress)
             .FirstOrDefaultAsync(g => g.AppId == appId, ct)
@@ -37,11 +41,13 @@ public class GameIdleService(
         game.Progress.LastSessionStart = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
+        var targetMinutes = (int)(game.TargetHours * 60);
+
         SendGamesPlayed(appId);
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running[appId] = cts;
-        _ = RunIdleLoopAsync(appId, (int)(game.TargetHours * 60), cts.Token);
+        _ = RunIdleLoopAsync(appId, targetMinutes, cts.Token);
     }
 
     public async Task StopAsync(int appId)
@@ -50,6 +56,8 @@ public class GameIdleService(
         await cts.CancelAsync();
         _running.Remove(appId);
 
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var game = await db.GameConfigs.Include(g => g.Progress)
             .FirstOrDefaultAsync(g => g.AppId == appId);
         if (game != null)
@@ -67,6 +75,9 @@ public class GameIdleService(
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMinutes(1), ct);
+
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 var progress = await db.GameProgresses.FirstAsync(p => p.AppId == appId, ct);
                 progress.AccumulatedMinutes++;

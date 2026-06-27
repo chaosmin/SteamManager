@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamKit2;
 using SteamManager.Infrastructure.Crypto;
@@ -11,7 +12,7 @@ namespace SteamManager.Infrastructure.Services;
 
 public class SteamSessionService(
     SteamClientWrapper steam,
-    AppDbContext db,
+    IServiceScopeFactory scopeFactory,
     IConfiguration config,
     ILogger<SteamSessionService> logger) : ISteamSessionService
 {
@@ -25,6 +26,9 @@ public class SteamSessionService(
 
     public async Task<bool> TryRestoreSessionAsync(CancellationToken ct = default)
     {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
         var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
         if (cfg?.SessionToken == null) return false;
         try
@@ -108,13 +112,11 @@ public class SteamSessionService(
 
     private async Task PersistSessionAsync(CancellationToken ct)
     {
-        // SteamKit2 3.x: capture session token via SessionTokenCallback
         string? sessionToken = null;
         var keySub = steam.CallbackManager.Subscribe<SteamUser.SessionTokenCallback>(cb =>
         {
             sessionToken = cb.SessionToken.ToString();
         });
-        // Give SteamKit2 up to 5s to deliver the session token
         await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
         keySub.Dispose();
 
@@ -123,6 +125,9 @@ public class SteamSessionService(
             logger.LogWarning("No session token received; session will not be persisted");
             return;
         }
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct)
             ?? new Core.Models.SteamConfig();
@@ -143,6 +148,9 @@ public class SteamSessionService(
     {
         steam.SteamUser.LogOff();
         SetState(LoginState.NotLoggedIn);
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var cfg = await db.SteamConfigs.FirstOrDefaultAsync();
         if (cfg != null) { cfg.SessionToken = null; await db.SaveChangesAsync(); }
     }

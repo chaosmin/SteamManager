@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamManager.Core.Services;
 using SteamManager.Infrastructure.Persistence;
@@ -8,9 +9,8 @@ using SteamManager.Infrastructure.Steam;
 namespace SteamManager.Infrastructure.Services;
 
 public class UnlockSchedulerService(
-    AppDbContext db,
     AchievementHandler handler,
-    IAchievementDataService dataService,
+    IServiceScopeFactory scopeFactory,
     IConfiguration config,
     ILogger<UnlockSchedulerService> logger) : IUnlockSchedulerService
 {
@@ -23,10 +23,11 @@ public class UnlockSchedulerService(
     {
         if (_running.ContainsKey(appId)) return;
 
-        // Ensure schedule exists
-        var existing = await db.AchievementSchedules
-            .AnyAsync(s => s.AppId == appId, ct);
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var dataService = scope.ServiceProvider.GetRequiredService<IAchievementDataService>();
 
+        var existing = await db.AchievementSchedules.AnyAsync(s => s.AppId == appId, ct);
         if (!existing)
         {
             var intervals = await dataService.GetIntervalsAsync(appId, ct);
@@ -59,6 +60,9 @@ public class UnlockSchedulerService(
         {
             while (!ct.IsCancellationRequested)
             {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
                 var progress = await db.GameProgresses
                     .FirstOrDefaultAsync(p => p.AppId == appId, ct);
                 if (progress == null) { await Task.Delay(30_000, ct); continue; }
