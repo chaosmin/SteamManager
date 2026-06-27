@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamKit2;
+using SteamKit2.Authentication;
 using SteamManager.Infrastructure.Crypto;
 using SteamManager.Infrastructure.Persistence;
 using SteamManager.Core.Services;
@@ -18,11 +19,44 @@ public class SteamSessionService(
 {
     public LoginState State { get; private set; } = LoginState.NotLoggedIn;
     public string? DisplayName { get; private set; }
+    public ulong? SteamId64 { get; private set; }
     public event Action? StateChanged;
 
     private string EncKey => config["SESSION_ENCRYPTION_KEY"]
         ?? Environment.GetEnvironmentVariable("SESSION_ENCRYPTION_KEY")!;
+
     private string? _pendingUsername;
+    private PendingAuthenticator? _authenticator;
+    private Task<AuthPollResult>? _pollTask;
+
+    // ── IAuthenticator that pauses when a 2FA code is required ──────────────
+
+    private sealed class PendingAuthenticator : IAuthenticator
+    {
+        public readonly TaskCompletionSource CodeNeeded = new();
+        private TaskCompletionSource<string> _codeTcs = new();
+
+        public void SubmitCode(string code) => _codeTcs.TrySetResult(code);
+
+        public Task<string> GetDeviceCodeAsync(bool previousCodeWasIncorrect)
+        {
+            if (previousCodeWasIncorrect) _codeTcs = new();
+            CodeNeeded.TrySetResult();
+            return _codeTcs.Task;
+        }
+
+        public Task<string> GetEmailCodeAsync(string email, bool previousCodeWasIncorrect)
+        {
+            if (previousCodeWasIncorrect) _codeTcs = new();
+            CodeNeeded.TrySetResult();
+            return _codeTcs.Task;
+        }
+
+        // Device-confirmation (phone pop-up without code) — not supported
+        public Task<bool> AcceptDeviceConfirmationAsync() => Task.FromResult(false);
+    }
+
+    // ── Public interface ─────────────────────────────────────────────────────
 
     public async Task<bool> TryRestoreSessionAsync(CancellationToken ct = default)
     {
@@ -50,6 +84,7 @@ public class SteamSessionService(
             if (await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct))
             {
                 DisplayName = steam.SteamFriends.GetPersonaName();
+                SteamId64 = steam.Client.SteamID;
                 SetState(LoginState.LoggedIn);
                 return true;
             }
@@ -68,64 +103,98 @@ public class SteamSessionService(
         _pendingUsername = username;
         await steam.ConnectWithReconnectAsync(ct);
 
-        var tcs = new TaskCompletionSource<LoginState>();
-        steam.CallbackManager.Subscribe<SteamUser.LoggedOnCallback>(cb =>
-        {
-            if (cb.Result is EResult.AccountLoginDeniedNeedTwoFactor or EResult.TwoFactorCodeMismatch)
-                tcs.TrySetResult(LoginState.AwaitingTwoFactor);
-            else if (cb.Result == EResult.OK)
-                tcs.TrySetResult(LoginState.LoggedIn);
-            else
-                tcs.TrySetResult(LoginState.NotLoggedIn);
-        });
+        _authenticator = new PendingAuthenticator();
 
-        steam.SteamUser.LogOn(new SteamUser.LogOnDetails
+        CredentialsAuthSession session;
+        try
         {
-            Username = username,
-            Password = password,
-            ShouldRememberPassword = true,
-        });
+            session = await steam.Client.Authentication.BeginAuthSessionViaCredentialsAsync(
+                new AuthSessionDetails
+                {
+                    Username = username,
+                    Password = password,
+                    IsPersistentSession = true,
+                    Authenticator = _authenticator,
+                });
+        }
+        catch (AuthenticationException ex)
+        {
+            logger.LogWarning("Steam auth failed: {Result}", ex.Result);
+            SetState(LoginState.NotLoggedIn);
+            return LoginState.NotLoggedIn;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Steam auth error");
+            SetState(LoginState.NotLoggedIn);
+            return LoginState.NotLoggedIn;
+        }
 
-        var state = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
-        if (state == LoginState.LoggedIn) await PersistSessionAsync(ct);
-        SetState(state);
-        return state;
+        // Background polling — will call IAuthenticator if a code is needed
+        _pollTask = session.PollingWaitForResultAsync(ct);
+
+        // Race: poll completes immediately (no 2FA) vs authenticator needs a code
+        var first = await Task.WhenAny(_pollTask, _authenticator.CodeNeeded.Task);
+
+        if (first == _pollTask)
+        {
+            if (_pollTask.IsCompletedSuccessfully)
+                return await FinishLoginAsync(_pollTask.Result, ct);
+
+            var ex = _pollTask.Exception?.InnerException;
+            logger.LogWarning(ex, "Auth polling failed");
+            SetState(LoginState.NotLoggedIn);
+            return LoginState.NotLoggedIn;
+        }
+
+        // Authenticator.CodeNeeded fired — waiting for user to supply the code
+        SetState(LoginState.AwaitingTwoFactor);
+        return LoginState.AwaitingTwoFactor;
     }
 
     public async Task<bool> SubmitTwoFactorCodeAsync(string code, CancellationToken ct = default)
     {
-        var tcs = new TaskCompletionSource<bool>();
-        steam.OnLoggedOn += () => tcs.TrySetResult(true);
-        steam.OnLoggedOff += _ => tcs.TrySetResult(false);
+        if (_authenticator == null || _pollTask == null) return false;
+        try
+        {
+            _authenticator.SubmitCode(code);
+            var result = await _pollTask.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            var state = await FinishLoginAsync(result, ct);
+            return state == LoginState.LoggedIn;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "2FA submission failed");
+            SetState(LoginState.NotLoggedIn);
+            return false;
+        }
+    }
+
+    private async Task<LoginState> FinishLoginAsync(AuthPollResult pollResult, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<LoginState>();
+        var sub = steam.CallbackManager.Subscribe<SteamUser.LoggedOnCallback>(cb =>
+            tcs.TrySetResult(cb.Result == EResult.OK ? LoginState.LoggedIn : LoginState.NotLoggedIn));
 
         steam.SteamUser.LogOn(new SteamUser.LogOnDetails
         {
             Username = _pendingUsername!,
-            TwoFactorCode = code,
+            AccessToken = pollResult.RefreshToken,
             ShouldRememberPassword = true,
         });
 
-        var ok = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
-        if (ok) await PersistSessionAsync(ct);
-        return ok;
+        var state = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        sub.Dispose();
+
+        if (state == LoginState.LoggedIn)
+            await PersistSessionAsync(pollResult.RefreshToken, ct);
+
+        SetState(state);
+        return state;
     }
 
-    private async Task PersistSessionAsync(CancellationToken ct)
+    private async Task PersistSessionAsync(string refreshToken, CancellationToken ct)
     {
-        string? sessionToken = null;
-        var keySub = steam.CallbackManager.Subscribe<SteamUser.SessionTokenCallback>(cb =>
-        {
-            sessionToken = cb.SessionToken.ToString();
-        });
-        await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
-        keySub.Dispose();
-
-        if (sessionToken == null)
-        {
-            logger.LogWarning("No session token received; session will not be persisted");
-            return;
-        }
-
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -134,14 +203,14 @@ public class SteamSessionService(
 
         cfg.Username = _pendingUsername!;
         cfg.PasswordEnc = null;
-        cfg.SessionToken = AesEncryption.Encrypt(sessionToken, EncKey);
+        cfg.SessionToken = AesEncryption.Encrypt(refreshToken, EncKey);
         cfg.SessionUpdatedAt = DateTime.UtcNow;
 
         if (cfg.Id == 0) db.SteamConfigs.Add(cfg);
         await db.SaveChangesAsync(ct);
 
         DisplayName = steam.SteamFriends.GetPersonaName();
-        SetState(LoginState.LoggedIn);
+        SteamId64 = steam.Client.SteamID;
     }
 
     public async Task LogoutAsync()

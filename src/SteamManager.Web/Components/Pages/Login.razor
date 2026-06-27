@@ -11,18 +11,19 @@
             </CardHeaderContent>
         </MudCardHeader>
         <MudCardContent>
-            <form method="post" action="/api/login">
-                <MudTextField T="string" name="password" InputType="InputType.Password"
-                              Label="Access Password" Variant="Variant.Outlined"
-                              FullWidth="true" Class="mb-4" />
+            <form method="post" action="/api/login" data-enhance="false">
                 @if (ShowError)
                 {
                     <MudAlert Severity="Severity.Error" Class="mb-3">Incorrect password</MudAlert>
                 }
-                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled"
-                           Color="Color.Primary" FullWidth="true" Size="Size.Large">
-                    Enter
-                </MudButton>
+                <div class="mb-4">
+                    <input type="password" name="password" placeholder="Access Password"
+                           style="width:100%;padding:16px;background:#2a475e;color:rgba(255,255,255,0.87);border:1px solid rgba(255,255,255,0.23);border-radius:4px;font-size:1rem;outline:none;box-sizing:border-box;" />
+                </div>
+                <button type="submit"
+                        style="width:100%;padding:12px;background:#66c0f4;color:#1b2838;border:none;border-radius:4px;font-size:1rem;font-weight:600;cursor:pointer;letter-spacing:0.05em;">
+                    ENTER
+                </button>
             </form>
         </MudCardContent>
     </MudCard>

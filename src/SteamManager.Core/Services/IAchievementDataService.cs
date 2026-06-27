@@ -1,9 +1,7 @@
-using SteamManager.Core.Dto;
-
 namespace SteamManager.Core.Services;
 
 public interface IAchievementDataService
 {
-    Task<List<AchievementIntervalDto>> GetIntervalsAsync(int appId, CancellationToken ct = default);
-    Task RefreshCacheAsync(int appId, CancellationToken ct = default);
+    /// <summary>Fetch schema + intervals and upsert Achievement rows for the given game.</summary>
+    Task LoadAchievementsAsync(int gameId, int appId, CancellationToken ct = default);
 }

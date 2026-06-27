@@ -6,6 +6,7 @@ public interface ISteamSessionService
 {
     LoginState State { get; }
     string? DisplayName { get; }
+    ulong? SteamId64 { get; }
     event Action? StateChanged;
 
     Task<bool> TryRestoreSessionAsync(CancellationToken ct = default);

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SteamManager.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using SteamManager.Infrastructure.Persistence;
 namespace SteamManager.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260627143243_ReplaceSyncIntervalWithCron")]
+    partial class ReplaceSyncIntervalWithCron
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -45,9 +48,6 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("DisplayName")
                         .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("DisplayNameI18n")
                         .HasColumnType("longtext");
 
                     b.Property<int>("GameId")
@@ -107,18 +107,15 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<DateTime>("CreatedAt"));
 
+                    b.Property<bool>("EnableAchievements")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<DateTime?>("LastSessionStart")
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("longtext");
-
-                    b.Property<string>("NameI18n")
-                        .HasColumnType("longtext");
-
-                    b.Property<int?>("ReferencePlayMinutes")
-                        .HasColumnType("int");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -164,10 +161,6 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("longtext")
                         .HasDefaultValue("UTC");
-
-                    b.Property<string>("Language")
-                        .IsRequired()
-                        .HasColumnType("longtext");
 
                     b.Property<string>("PasswordEnc")
                         .HasColumnType("longtext");

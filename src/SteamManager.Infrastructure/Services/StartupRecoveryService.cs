@@ -24,7 +24,7 @@ public class StartupRecoveryService(
             return;
         }
 
-        var runningGames = await db.GameConfigs
+        var runningGames = await db.Games
             .Where(g => g.Status == GameStatus.Running)
             .ToListAsync(ct);
 
@@ -32,8 +32,8 @@ public class StartupRecoveryService(
         {
             logger.LogInformation("Resuming game {AppId} ({Name})", game.AppId, game.Name);
             await idle.StartAsync(game.AppId, ct);
-            if (game.EnableAchievements)
-                await scheduler.StartAsync(game.AppId, ct);
+            await scheduler.StartAsync(game.AppId, ct);
         }
+
     }
 }

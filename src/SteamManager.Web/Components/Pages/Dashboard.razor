@@ -19,7 +19,7 @@ else
     <MudGrid>
         @foreach (var game in _games)
         {
-            var minutes = game.Progress?.AccumulatedMinutes ?? 0;
+            var minutes = game.TotalPlayMinutes;
             var target = (int)(game.TargetHours * 60);
             var pct = target > 0 ? Math.Min(100, minutes * 100 / target) : 0;
 
@@ -47,18 +47,18 @@ else
 }
 
 @code {
-    List<GameConfig> _games = [];
+    List<Game> _games = [];
 
     protected override async Task OnInitializedAsync()
     {
         IdleService.ProgressUpdated += OnProgress;
-        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+        _games = await Db.Games.ToListAsync();
     }
 
     void OnProgress(int appId, int minutes)
     {
         var game = _games.FirstOrDefault(g => g.AppId == appId);
-        if (game?.Progress != null) { game.Progress.AccumulatedMinutes = minutes; InvokeAsync(StateHasChanged); }
+        if (game != null) { game.TotalPlayMinutes = minutes; InvokeAsync(StateHasChanged); }
     }
 
     Color StatusColor(GameStatus s) => s switch

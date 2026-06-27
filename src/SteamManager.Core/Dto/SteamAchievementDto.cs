@@ -4,5 +4,7 @@ public record SteamAchievementDto(
     string ApiName,
     string DisplayName,
     double GlobalPercent,
-    long? UnlockTime    // Unix timestamp; null if locked
+    long? UnlockTime,       // Unix timestamp; null if locked
+    string? IconUrl = null,
+    string? IconGrayUrl = null
 );

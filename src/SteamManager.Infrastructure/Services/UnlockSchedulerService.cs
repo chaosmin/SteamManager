@@ -27,20 +27,12 @@ public class UnlockSchedulerService(
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var dataService = scope.ServiceProvider.GetRequiredService<IAchievementDataService>();
 
-        var existing = await db.AchievementSchedules.AnyAsync(s => s.AppId == appId, ct);
-        if (!existing)
-        {
-            var intervals = await dataService.GetIntervalsAsync(appId, ct);
-            var items = intervals.Select(i => new Core.Models.AchievementScheduleItem
-            {
-                AppId = appId,
-                AchievementId = i.AchievementId,
-                OffsetMinutes = i.OffsetMinutes,
-                Done = false,
-            }).ToList();
-            db.AchievementSchedules.AddRange(items);
-            await db.SaveChangesAsync(ct);
-        }
+        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
+        if (game == null) return;
+
+        var hasAchievements = await db.Achievements.AnyAsync(a => a.GameId == game.Id, ct);
+        if (!hasAchievements)
+            await dataService.LoadAchievementsAsync(game.Id, appId, ct);
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running[appId] = cts;
@@ -58,48 +50,82 @@ public class UnlockSchedulerService(
     {
         try
         {
+            // Phase 1: catch-up — unlock all overdue achievements with 1-100s random gaps
+            await CatchUpOverdueAsync(appId, ct);
+
+            // Phase 2: poll every ~30s for newly-due achievements
             while (!ct.IsCancellationRequested)
             {
-                using var scope = scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                var progress = await db.GameProgresses
-                    .FirstOrDefaultAsync(p => p.AppId == appId, ct);
-                if (progress == null) { await Task.Delay(30_000, ct); continue; }
-
-                var next = await db.AchievementSchedules
-                    .Where(s => s.AppId == appId && !s.Done && s.OffsetMinutes <= progress.AccumulatedMinutes)
-                    .OrderBy(s => s.OffsetMinutes)
-                    .FirstOrDefaultAsync(ct);
-
-                if (next != null)
-                {
-                    logger.LogInformation("Unlocking {AchId} for app {AppId} at {Min}min",
-                        next.AchievementId, appId, progress.AccumulatedMinutes);
-
-                    var ok = await handler.UnlockAchievementAsync(appId, next.AchievementId, ct);
-                    if (ok)
-                    {
-                        next.Done = true;
-                        next.UnlockedAt = DateTime.UtcNow;
-                        await db.SaveChangesAsync(ct);
-                    }
-                }
-
                 await Task.Delay(ApplyJitter(30_000, JitterPercent), ct);
+                await UnlockNextDueAsync(appId, ct);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { logger.LogError(ex, "Scheduler loop error for {AppId}", appId); }
     }
 
-    public static int GetWaitMinutes(int currentMinutes, IReadOnlyList<Core.Models.AchievementScheduleItem> schedule)
+    private async Task CatchUpOverdueAsync(int appId, CancellationToken ct)
     {
-        var next = schedule
-            .Where(s => !s.Done && s.OffsetMinutes > currentMinutes)
-            .OrderBy(s => s.OffsetMinutes)
-            .FirstOrDefault();
-        return next == null ? -1 : next.OffsetMinutes - currentMinutes;
+        List<(int Id, string ApiName)> overdue;
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
+            if (game == null) return;
+
+            var rows = await db.Achievements
+                .Where(a => a.GameId == game.Id && !a.IsUnlocked
+                            && a.UnlockOffsetMinutes <= game.TotalPlayMinutes)
+                .OrderBy(a => a.UnlockOffsetMinutes)
+                .Select(a => new { a.Id, a.ApiName })
+                .ToListAsync(ct);
+            overdue = rows.Select(r => (r.Id, r.ApiName)).ToList();
+        }
+
+        if (overdue.Count == 0) return;
+        logger.LogInformation("Catch-up: {Count} overdue achievements for app {AppId}", overdue.Count, appId);
+
+        foreach (var (id, apiName) in overdue)
+        {
+            if (ct.IsCancellationRequested) break;
+            await Task.Delay(Random.Shared.Next(1_000, 101_000), ct); // 1-100s gap
+            var ok = await handler.UnlockAchievementAsync(appId, apiName, ct);
+            if (ok) await SaveUnlockedAsync(id, ct);
+        }
+    }
+
+    private async Task UnlockNextDueAsync(int appId, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
+        if (game == null) return;
+
+        var next = await db.Achievements
+            .Where(a => a.GameId == game.Id && !a.IsUnlocked
+                        && a.UnlockOffsetMinutes <= game.TotalPlayMinutes)
+            .OrderBy(a => a.UnlockOffsetMinutes)
+            .FirstOrDefaultAsync(ct);
+        if (next == null) return;
+
+        logger.LogInformation("Unlocking {AchId} for app {AppId} at {Min}min",
+            next.ApiName, appId, game.TotalPlayMinutes);
+
+        await Task.Delay(Random.Shared.Next(1_000, 101_000), ct); // ±1-100s pre-unlock jitter
+        var ok = await handler.UnlockAchievementAsync(appId, next.ApiName, ct);
+        if (ok) await SaveUnlockedAsync(next.Id, ct);
+    }
+
+    private async Task SaveUnlockedAsync(int achievementId, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var ach = await db.Achievements.FindAsync([achievementId], ct);
+        if (ach == null) return;
+        ach.IsUnlocked = true;
+        ach.UnlockedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
     }
 
     public static int ApplyJitter(int baseMs, int jitterPercent)

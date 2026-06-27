@@ -4,114 +4,176 @@
 @inject IGameIdleService IdleService
 @inject IUnlockSchedulerService SchedulerService
 @inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject ISteamSessionService Session
+@inject SteamWebApiClient SteamApi
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
+@using SteamManager.Infrastructure.Http
 @using SteamManager.Core.Models
 @using Microsoft.EntityFrameworkCore
 
-<MudText Typo="Typo.h4" Class="mb-4">Games</MudText>
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h4">Games</MudText>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync"
+               OnClick="SyncLibrary" Disabled="_syncing">
+        @(_syncing ? "Syncing..." : "Sync Library")
+    </MudButton>
+</div>
 
-<MudCard Elevation="2" Class="mb-6">
-    <MudCardHeader>
-        <CardHeaderContent><MudText Typo="Typo.h6">Add Game</MudText></CardHeaderContent>
-    </MudCardHeader>
-    <MudCardContent>
-        <MudGrid>
-            <MudItem xs="12" sm="3">
-                <MudNumericField @bind-Value="_newAppId" Label="App ID" Variant="Variant.Outlined" FullWidth="true" />
-            </MudItem>
-            <MudItem xs="12" sm="4">
-                <MudTextField @bind-Value="_newName" Label="Game Name" Variant="Variant.Outlined" FullWidth="true" />
-            </MudItem>
-            <MudItem xs="12" sm="2">
-                <MudNumericField @bind-Value="_targetHours" Label="Target Hours" Variant="Variant.Outlined" FullWidth="true" />
-            </MudItem>
-            <MudItem xs="12" sm="2" Class="d-flex align-center">
-                <MudCheckBox @bind-Value="_enableAchievements" Label="Achievements" Color="Color.Primary" />
-            </MudItem>
-            <MudItem xs="12" sm="1" Class="d-flex align-center">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddGame" FullWidth="true">Add</MudButton>
-            </MudItem>
+<!-- Filter bar -->
+<div class="d-flex align-center flex-wrap gap-4 mb-4">
+    <MudTextField @bind-Value="_search" Placeholder="Search games..." Variant="Variant.Outlined"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Clearable="true" FullWidth="false" Style="min-width:240px" Dense="true"
+                  Immediate="true" />
+    <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
+    <MudSwitch @bind-Value="_onlyIncomplete" Color="Color.Secondary" Label="Not 100%" />
+</div>
+
+@if (_games.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">
+        No games yet. Click <strong>Sync Library</strong> to import your Steam library
+        (requires Web API Key in Settings).
+    </MudAlert>
+}
+else
+{
+    var filtered = _games
+        .Where(g => string.IsNullOrWhiteSpace(_search) ||
+                    g.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        .Where(g => !_onlyWithAchievements || g.Achievements.Count > 0)
+        .Where(g => !_onlyIncomplete ||
+                    (g.Achievements.Count > 0 &&
+                     g.Achievements.Count(a => a.IsUnlocked) < g.Achievements.Count))
+        .ToList();
+
+    @if (filtered.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">No games match the current filters.</MudAlert>
+    }
+    else
+    {
+        <MudGrid Spacing="3">
+            @foreach (var game in filtered)
+            {
+                var played = game.TotalPlayMinutes;
+                var achTotal = game.Achievements.Count;
+                var achDone = game.Achievements.Count(a => a.IsUnlocked);
+
+                var refMinutes = achTotal > 0
+                    ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
+                    : (int)(game.TargetHours * 60);
+                if (refMinutes == 0) refMinutes = (int)(game.TargetHours * 60);
+
+                double playGreenPct, playSecondPct;
+                string secondColor;
+                if (refMinutes > 0 && played <= refMinutes)
+                {
+                    playGreenPct = played * 100.0 / refMinutes;
+                    playSecondPct = 100.0 - playGreenPct;
+                    secondColor = "#f44336";
+                }
+                else if (refMinutes > 0 && played > refMinutes)
+                {
+                    playGreenPct = refMinutes * 100.0 / played;
+                    playSecondPct = 100.0 - playGreenPct;
+                    secondColor = "#ff9800";
+                }
+                else
+                {
+                    playGreenPct = 0; playSecondPct = 100; secondColor = "rgba(255,255,255,0.12)";
+                }
+
+                double achGreenPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
+                double achRedPct = 100.0 - achGreenPct;
+
+                <MudItem xs="12" sm="6" md="4" lg="3">
+                    <MudCard Elevation="3" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
+                        <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
+                            <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
+                                 style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
+                                 onerror="this.src=''" />
+                            <div style="position:absolute;top:6px;right:6px">
+                                <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
+                                         Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
+                            </div>
+                        </div>
+
+                        <MudCardContent Style="flex:1;padding-bottom:4px">
+                            <MudText Typo="Typo.subtitle1" Class="mb-2"
+                                     Style="@($"font-weight:600;line-height:1.2;{(achTotal > 0 && achDone == achTotal ? "color:#4caf50" : "")}")">
+                                @(game.NameI18n ?? game.Name)
+                            </MudText>
+
+                            <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
+                                @($"{played / 60.0:F1}h") / @($"{refMinutes / 60.0:F1}h")
+                                @if (achTotal > 0) { <span style="font-size:0.7rem"> avg</span> }
+                            </MudText>
+                            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12);margin-bottom:8px">
+                                @if (playGreenPct > 0)
+                                {
+                                    <div style="width:@(playGreenPct.ToString("F1"))%;background:#4caf50"></div>
+                                }
+                                @if (playSecondPct > 0)
+                                {
+                                    <div style="width:@(playSecondPct.ToString("F1"))%;background:@secondColor"></div>
+                                }
+                            </div>
+
+                            @if (achTotal > 0)
+                            {
+                                <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
+                                    Achievements: @achDone / @achTotal
+                                </MudText>
+                                <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12)">
+                                    @if (achGreenPct > 0)
+                                    {
+                                        <div style="width:@(achGreenPct.ToString("F1"))%;background:#4caf50"></div>
+                                    }
+                                    @if (achRedPct > 0)
+                                    {
+                                        <div style="width:@(achRedPct.ToString("F1"))%;background:#f44336"></div>
+                                    }
+                                </div>
+                            }
+                        </MudCardContent>
+
+                        <MudCardActions Style="padding-top:0">
+                            @if (achTotal > 0)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Color="Color.Info" Size="Size.Small"
+                                               OnClick="@(() => Nav.NavigateTo($"/games/{game.Id}"))" />
+                            }
+                            @if (game.Status == GameStatus.Idle || game.Status == GameStatus.Completed)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" Size="Size.Small"
+                                               OnClick="@(() => StartGame(game.AppId))" />
+                            }
+                            else if (game.Status == GameStatus.Running)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
+                                               OnClick="@(() => StopGame(game.AppId))" />
+                            }
+                        </MudCardActions>
+                    </MudCard>
+                </MudItem>
+            }
         </MudGrid>
-    </MudCardContent>
-</MudCard>
-
-<MudTable Items="_games" Hover="true" Elevation="2" Dense="false">
-    <HeaderContent>
-        <MudTh>Game</MudTh>
-        <MudTh>App ID</MudTh>
-        <MudTh>Progress</MudTh>
-        <MudTh>Status</MudTh>
-        <MudTh>Actions</MudTh>
-    </HeaderContent>
-    <RowTemplate>
-        <MudTd>
-            <MudText Typo="Typo.body1">@context.Name</MudText>
-            @if (context.EnableAchievements)
-            {
-                <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Class="ml-1">Achievements</MudChip>
-            }
-        </MudTd>
-        <MudTd><MudText Typo="Typo.body2" Color="Color.Secondary">@context.AppId</MudText></MudTd>
-        <MudTd>
-            @{
-                var min = context.Progress?.AccumulatedMinutes ?? 0;
-                var tgt = (int)(context.TargetHours * 60);
-                var pct = tgt > 0 ? Math.Min(100, min * 100 / tgt) : 0;
-            }
-            <MudText Typo="Typo.caption">@($"{min / 60.0:F1}h") / @context.TargetHours h</MudText>
-            <MudProgressLinear Value="@pct" Color="Color.Primary" Rounded="true" Size="Size.Small" Class="mt-1" />
-        </MudTd>
-        <MudTd>
-            <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Status)">@context.Status</MudChip>
-        </MudTd>
-        <MudTd>
-            @if (context.Status == GameStatus.Idle)
-            {
-                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success"
-                               OnClick="@(() => StartGame(context.AppId))" />
-            }
-            else if (context.Status == GameStatus.Running)
-            {
-                <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error"
-                               OnClick="@(() => StopGame(context.AppId))" />
-            }
-        </MudTd>
-    </RowTemplate>
-    <NoRecordsContent>
-        <MudText>No games added yet.</MudText>
-    </NoRecordsContent>
-</MudTable>
+    }
+}
 
 @code {
-    List<GameConfig> _games = [];
-    int _newAppId;
-    string _newName = "";
-    decimal _targetHours = 10;
-    bool _enableAchievements = true;
+    List<Game> _games = [];
+    bool _syncing;
+    string _search = "";
+    bool _onlyWithAchievements;
+    bool _onlyIncomplete;
 
     protected override async Task OnInitializedAsync()
     {
-        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
-    }
-
-    async Task AddGame()
-    {
-        if (_newAppId == 0 || string.IsNullOrWhiteSpace(_newName))
-        {
-            Snackbar.Add("App ID and game name are required", Severity.Warning);
-            return;
-        }
-        var game = new GameConfig
-        {
-            AppId = _newAppId, Name = _newName,
-            TargetHours = _targetHours, EnableAchievements = _enableAchievements
-        };
-        Db.GameConfigs.Add(game);
-        await Db.SaveChangesAsync();
-        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
-        Snackbar.Add($"{_newName} added", Severity.Success);
-        _newAppId = 0; _newName = "";
+        _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
     }
 
     async Task StartGame(int appId)
@@ -119,23 +181,62 @@
         try
         {
             await IdleService.StartAsync(appId);
-            var game = _games.First(g => g.AppId == appId);
-            if (game.EnableAchievements) await SchedulerService.StartAsync(appId);
-            _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+            await SchedulerService.StartAsync(appId);
+            _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
             Snackbar.Add("Game started", Severity.Success);
         }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to start: {ex.Message}", Severity.Error);
-        }
+        catch (Exception ex) { Snackbar.Add($"Failed to start: {ex.Message}", Severity.Error); }
     }
 
     async Task StopGame(int appId)
     {
         await IdleService.StopAsync(appId);
         await SchedulerService.StopAsync(appId);
-        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+        _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
         Snackbar.Add("Game stopped", Severity.Info);
+    }
+
+    async Task SyncLibrary()
+    {
+        if (Session.SteamId64 == null) { Snackbar.Add("Not logged in to Steam", Severity.Warning); return; }
+        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync();
+        if (cfg?.WebApiKey == null) { Snackbar.Add("Steam Web API key not set — configure it in Settings", Severity.Warning); return; }
+
+        _syncing = true;
+        try
+        {
+            var language = cfg.Language ?? "english";
+            var owned = await SteamApi.GetOwnedGamesAsync(Session.SteamId64.Value, cfg.WebApiKey, language);
+            var existingGames = await Db.Games.ToListAsync();
+            var existingMap = existingGames.ToDictionary(g => g.AppId);
+            int added = 0;
+            foreach (var (appId, name, playtimeMinutes) in owned)
+            {
+                if (existingMap.TryGetValue(appId, out var existing))
+                {
+                    if (language == "english") { existing.Name = name; existing.NameI18n = null; }
+                    else existing.NameI18n = name;
+                    existing.TotalPlayMinutes = playtimeMinutes;
+                }
+                else
+                {
+                    Db.Games.Add(new Game
+                    {
+                        AppId = appId,
+                        Name = name,
+                        NameI18n = language != "english" ? name : null,
+                        TargetHours = 10,
+                        TotalPlayMinutes = playtimeMinutes,
+                    });
+                    added++;
+                }
+            }
+            await Db.SaveChangesAsync();
+            _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
+            Snackbar.Add($"Synced {owned.Count} games — {added} new", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add($"Sync failed: {ex.Message}", Severity.Error); }
+        finally { _syncing = false; }
     }
 
     Color StatusColor(GameStatus s) => s switch

@@ -9,6 +9,8 @@ public class SteamConfig
     public string? SessionToken { get; set; }        // AES-256 encrypted RefreshToken
     public DateTime? SessionUpdatedAt { get; set; }  // UTC
     public string DisplayTimezone { get; set; } = "UTC";
+    public string SyncCron { get; set; } = "0 0 * * *"; // default: daily at midnight
+    public string Language { get; set; } = "english";   // steam API language: english / schinese
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

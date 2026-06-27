@@ -11,18 +11,20 @@ A self-hosted Steam automation service that idles game hours and unlocks achieve
 ## Features
 
 - **Game Hour Idling** — simulates gameplay to accumulate hours toward a configurable target
-- **Achievement Auto-Unlock** — derives unlock intervals from real 100%-completion players via [SteamHunters](https://steamhunters.com), falls back to global unlock percentage ordering
-- **Checkpoint Resume** — tracks progress per-minute in MySQL; picking up where you left off after a restart takes seconds
-- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores the session automatically on every startup
-- **Web UI** — Blazor Server dashboard with real-time progress, game management, settings, and an optional access password
-- **Timezone-aware** — stores all timestamps in UTC, displays them in your chosen IANA timezone
+- **Achievement Auto-Unlock** — derives unlock timing from [SteamHunters](https://steamhunters.com) median completion data; falls back to global unlock percentage ordering when unavailable
+- **Catch-up on Restart** — overdue achievements are unlocked in sequence (with 1–100 s random gaps) the moment a game session resumes
+- **Checkpoint Resume** — tracks progress per-minute in MySQL; restarts pick up exactly where you left off
+- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores automatically on every startup
+- **Multi-language UI** — game and achievement names displayed in English or Simplified Chinese (Steam's official localizations, English fallback)
+- **Background Sync** — scheduled (cron) or on-demand sync refreshes your library and all achievement data in one click
+- **Web UI** — Blazor Server dark-theme dashboard with real-time progress, game management, search/filter, and an optional access password
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Runtime | .NET 8 / ASP.NET Core |
-| UI | Blazor Server + SignalR |
+| UI | Blazor Server + MudBlazor (dark theme) |
 | Steam | SteamKit2 (no Steam client needed) |
 | Database | MySQL 8 + EF Core 8 + Pomelo |
 | Logging | Serilog (console + rolling file) |
@@ -78,24 +80,35 @@ Open `http://your-host:8080` → go to **Settings** → log in with your Steam c
 
 ## Usage
 
-### Adding a game
+### Adding games
 
-1. Go to **Games**
-2. Enter the App ID (find it on the Steam store URL, e.g. `730` for CS2), game name, and target hours
-3. Toggle **Achievements** if you want auto-unlock enabled
-4. Click **Add**, then **Start**
+Games are added automatically when you click **Sync Now** in Settings — it imports your entire Steam library. You can also add individual games manually via the Games page.
+
+### Refreshing achievement data
+
+Open a game's detail page and click **Refresh**. This fetches:
+1. Achievement schema from Steam (names, icons, global unlock rates) in your chosen language
+2. Median completion time from SteamHunters to derive realistic unlock offsets
+3. Your own current unlock status from Steam
 
 ### Achievement scheduling
 
-When a game starts with achievements enabled, SteamManager:
+When a game is started, SteamManager:
 
-1. Fetches the achievement list from the Steam Web API
-2. Queries SteamHunters for up to 20 players who reached 100% completion
-3. Calculates the **median** unlock interval between achievements across those players
-4. Falls back to global unlock percentage ordering if no player data is available
-5. Persists the schedule to MySQL and unlocks each achievement once the accumulated playtime reaches its offset
+1. Distributes achievement unlock times proportionally across the SteamHunters median completion window
+2. On start, immediately unlocks any achievements whose offset has already been passed (catch-up), with 1–100 s random gaps between each
+3. During play, polls every ~30 s and unlocks newly-due achievements with a 1–100 s random pre-unlock delay
+4. Falls back to global unlock percentage ordering if SteamHunters data is unavailable
 
 > A Steam Web API key is required for achievement data. Get one at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) and save it in **Settings**.
+
+### Background sync
+
+Configure a **cron schedule** in Settings (default: daily at midnight) for automatic library + achievement sync. Use **Sync Now** to trigger immediately. A progress bar shows per-game status in real time.
+
+### Language
+
+Set your preferred display language in Settings → Language. Supports **English** and **简体中文**. Steam's official localizations are used; English is the fallback when no translation exists for a game or achievement.
 
 ## Configuration Reference
 
@@ -115,8 +128,8 @@ When a game starts with achievements enabled, SteamManager:
 src/
 ├── SteamManager.Web/          # Blazor Server app, middleware, DI wiring
 ├── SteamManager.Core/         # Domain models, service interfaces, business logic
-│   ├── Models/                # EF entities
-│   ├── Services/              # Session, idle, scheduler, achievement calculator
+│   ├── Models/                # EF entities (Game, Achievement, SteamConfig)
+│   ├── Services/              # Session, idle, scheduler, sync, achievement calculator
 │   └── Dto/                   # Data transfer objects
 └── SteamManager.Infrastructure/
     ├── Steam/                 # SteamClientWrapper (SteamKit2), AchievementHandler
@@ -147,14 +160,14 @@ dotnet run --project src/SteamManager.Web
 docker pull chaosmin/steam-manager:latest
 ```
 
-Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.1.0`).
+Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.0`).
 
 ## Acknowledgements
 
 - [SteamKit2](https://github.com/SteamRE/SteamKit) — Steam protocol implementation
-- [ArchiSteamFarm](https://github.com/JustArchiNET/ArchiSteamFarm) — reference for `ClientStoreUserStats2` achievement unlock approach
-- [SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) — reference implementation
-- [SteamHunters](https://steamhunters.com) — perfect-game player data API
+- [ArchiSteamFarm](https://github.com/JustArchiNET/ArchiSteamFarm) — reference for SteamKit2 idling approach
+- [ASFAchievementManager](https://github.com/CatPoweredPlugins/ASFAchievementManager) — reference for `ClientStoreUserStats2` achievement unlock approach
+- [SteamHunters](https://steamhunters.com) — median completion time data API
 
 ## License
 

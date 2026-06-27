@@ -42,6 +42,9 @@ builder.Services.AddSingleton<IGameIdleService, GameIdleService>();
 builder.Services.AddSingleton<IUnlockSchedulerService, UnlockSchedulerService>();
 builder.Services.AddScoped<IAchievementDataService, AchievementDataService>();
 builder.Services.AddScoped<StartupRecoveryService>();
+builder.Services.AddSingleton<SyncBackgroundService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncBackgroundService>());
+builder.Services.AddSingleton<ISyncService>(sp => sp.GetRequiredService<SyncBackgroundService>());
 
 // HTTP clients
 builder.Services.AddHttpClient<SteamWebApiClient>();
@@ -65,12 +68,13 @@ using (var scope = app.Services.CreateScope())
     await db.Database.ExecuteSqlRawAsync("SET time_zone = '+00:00'");
 }
 
-// Startup recovery (restore Steam session + resume running games)
-using (var scope = app.Services.CreateScope())
+// Startup recovery — run in background so Kestrel starts immediately
+_ = Task.Run(async () =>
 {
+    using var scope = app.Services.CreateScope();
     var recovery = scope.ServiceProvider.GetRequiredService<StartupRecoveryService>();
     await recovery.RecoverAsync();
-}
+});
 
 app.UseMiddleware<UiAuthMiddleware>();
 app.UseStaticFiles();

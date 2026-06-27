@@ -27,18 +27,11 @@ public class GameIdleService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var game = await db.GameConfigs.Include(g => g.Progress)
-            .FirstOrDefaultAsync(g => g.AppId == appId, ct)
+        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct)
             ?? throw new InvalidOperationException($"Game {appId} not found");
 
-        if (game.Progress == null)
-        {
-            game.Progress = new GameProgress { AppId = appId };
-            db.GameProgresses.Add(game.Progress);
-        }
-
         game.Status = GameStatus.Running;
-        game.Progress.LastSessionStart = DateTime.UtcNow;
+        game.LastSessionStart = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
         var targetMinutes = (int)(game.TargetHours * 60);
@@ -58,8 +51,7 @@ public class GameIdleService(
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var game = await db.GameConfigs.Include(g => g.Progress)
-            .FirstOrDefaultAsync(g => g.AppId == appId);
+        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
         if (game != null)
         {
             game.Status = GameStatus.Idle;
@@ -79,15 +71,13 @@ public class GameIdleService(
                 using var scope = scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-                var progress = await db.GameProgresses.FirstAsync(p => p.AppId == appId, ct);
-                progress.AccumulatedMinutes++;
-                progress.UpdatedAt = DateTime.UtcNow;
+                var game = await db.Games.FirstAsync(g => g.AppId == appId, ct);
+                game.TotalPlayMinutes++;
                 await db.SaveChangesAsync(ct);
-                ProgressUpdated?.Invoke(appId, progress.AccumulatedMinutes);
+                ProgressUpdated?.Invoke(appId, game.TotalPlayMinutes);
 
-                if (progress.AccumulatedMinutes >= targetMinutes)
+                if (game.TotalPlayMinutes >= targetMinutes)
                 {
-                    var game = await db.GameConfigs.FirstAsync(g => g.AppId == appId, ct);
                     game.Status = GameStatus.Completed;
                     await db.SaveChangesAsync(ct);
                     SendGamesPlayed(0);
