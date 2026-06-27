@@ -8,14 +8,42 @@
 @using SteamManager.Core.Models
 @using Microsoft.EntityFrameworkCore
 
-<h3>Dashboard</h3>
+<MudText Typo="Typo.h4" Class="mb-4">Dashboard</MudText>
 
-@foreach (var game in _games)
+@if (!_games.Any())
 {
-    <div style="border:1px solid #ccc;margin:8px;padding:8px">
-        <strong>@game.Name</strong> — @(game.Progress?.AccumulatedMinutes ?? 0) / @((int)(game.TargetHours * 60)) min
-        <br/>Status: @game.Status
-    </div>
+    <MudAlert Severity="Severity.Info">No games added yet. Go to <MudLink Href="games">Games</MudLink> to get started.</MudAlert>
+}
+else
+{
+    <MudGrid>
+        @foreach (var game in _games)
+        {
+            var minutes = game.Progress?.AccumulatedMinutes ?? 0;
+            var target = (int)(game.TargetHours * 60);
+            var pct = target > 0 ? Math.Min(100, minutes * 100 / target) : 0;
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudCard Elevation="3">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.h6">@game.Name</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">App ID: @game.AppId</MudText>
+                        </CardHeaderContent>
+                        <CardHeaderActions>
+                            <MudChip T="string" Color="@StatusColor(game.Status)" Size="Size.Small">@game.Status</MudChip>
+                        </CardHeaderActions>
+                    </MudCardHeader>
+                    <MudCardContent>
+                        <MudText Typo="Typo.body2" Class="mb-2">
+                            @($"{minutes / 60.0:F1}h") / @game.TargetHours h
+                        </MudText>
+                        <MudProgressLinear Color="@StatusColor(game.Status)" Value="@pct" Rounded="true" Size="Size.Medium" />
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
 }
 
 @code {
@@ -32,6 +60,13 @@
         var game = _games.FirstOrDefault(g => g.AppId == appId);
         if (game?.Progress != null) { game.Progress.AccumulatedMinutes = minutes; InvokeAsync(StateHasChanged); }
     }
+
+    Color StatusColor(GameStatus s) => s switch
+    {
+        GameStatus.Running => Color.Success,
+        GameStatus.Completed => Color.Info,
+        _ => Color.Default
+    };
 
     public void Dispose() => IdleService.ProgressUpdated -= OnProgress;
 }

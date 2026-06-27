@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MudBlazor.Services;
 using Serilog;
 using SteamManager.Core.Services;
 using SteamManager.Infrastructure.Http;
@@ -30,7 +31,7 @@ builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configurati
 
 // Database
 builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseMySql(connStr, ServerVersion.AutoDetect(connStr),
+    opt.UseMySql(connStr, new MySqlServerVersion(new Version(8, 0, 0)),
         mysql => mysql.EnableRetryOnFailure(3)));
 
 // Steam + Core services
@@ -45,6 +46,9 @@ builder.Services.AddScoped<StartupRecoveryService>();
 // HTTP clients
 builder.Services.AddHttpClient<SteamWebApiClient>();
 builder.Services.AddHttpClient<SteamHuntersClient>();
+
+// MudBlazor
+builder.Services.AddMudServices();
 
 // Blazor
 builder.Services.AddRazorComponents()

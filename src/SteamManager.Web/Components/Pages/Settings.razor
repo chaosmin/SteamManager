@@ -3,48 +3,94 @@
 @inject ISteamSessionService Session
 @inject IConfiguration Config
 @inject AppDbContext Db
+@inject ISnackbar Snackbar
 @implements IDisposable
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
 @using Microsoft.EntityFrameworkCore
 
-<h3>Settings</h3>
+<MudText Typo="Typo.h4" Class="mb-4">Settings</MudText>
 
-<h4>Steam Account</h4>
-@if (Session.State == LoginState.LoggedIn)
-{
-    <p>Logged in as: <strong>@Session.DisplayName</strong></p>
-    <button @onclick="Logout">Logout</button>
-}
-else if (Session.State == LoginState.AwaitingTwoFactor)
-{
-    <input @bind="_twoFaCode" placeholder="2FA code" maxlength="5" />
-    <button @onclick="Submit2Fa">Submit</button>
-}
-else
-{
-    <input @bind="_username" placeholder="Steam username" />
-    <input type="password" @bind="_password" placeholder="Steam password" />
-    <button @onclick="Login">Login</button>
-}
-@if (_message != null) { <p>@_message</p> }
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">
+                        <MudIcon Icon="@Icons.Custom.Brands.Steam" Class="mr-2" />
+                        Steam Account
+                    </MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (Session.State == LoginState.LoggedIn)
+                {
+                    <MudAlert Severity="Severity.Success" Class="mb-3">
+                        Logged in as <strong>@Session.DisplayName</strong>
+                    </MudAlert>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="Logout">Logout</MudButton>
+                }
+                else if (Session.State == LoginState.AwaitingTwoFactor)
+                {
+                    <MudAlert Severity="Severity.Info" Class="mb-3">Enter the code from your Steam Authenticator app</MudAlert>
+                    <MudTextField @bind-Value="_twoFaCode" Label="2FA Code" Variant="Variant.Outlined"
+                                  MaxLength="5" FullWidth="true" Class="mb-3" />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Submit2Fa"
+                               Disabled="_busy" FullWidth="true">
+                        @if (_busy) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                        Submit Code
+                    </MudButton>
+                }
+                else
+                {
+                    <MudTextField @bind-Value="_username" Label="Steam Username" Variant="Variant.Outlined"
+                                  FullWidth="true" Class="mb-3" />
+                    <MudTextField @bind-Value="_password" Label="Steam Password" InputType="InputType.Password"
+                                  Variant="Variant.Outlined" FullWidth="true" Class="mb-3" />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Login"
+                               Disabled="_busy" FullWidth="true">
+                        @if (_busy) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                        Login
+                    </MudButton>
+                }
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
 
-<h4>Steam Web API Key</h4>
-<input @bind="_apiKey" placeholder="API key from steamcommunity.com/dev/apikey" style="width:400px" />
-<button @onclick="SaveApiKey">Save</button>
+    <MudItem xs="12" md="6">
+        <MudCard Elevation="2" Class="mb-4">
+            <MudCardHeader>
+                <CardHeaderContent><MudText Typo="Typo.h6">Steam Web API Key</MudText></CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudTextField @bind-Value="_apiKey" Label="API Key" Variant="Variant.Outlined"
+                              FullWidth="true" Class="mb-3"
+                              HelperText="Get yours at steamcommunity.com/dev/apikey" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveApiKey">Save</MudButton>
+            </MudCardContent>
+        </MudCard>
 
-<h4>Display Timezone</h4>
-<select @bind="_timezone">
-    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
-    {
-        <option value="@tz.Id">@tz.DisplayName</option>
-    }
-</select>
-<button @onclick="SaveTimezone">Save</button>
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent><MudText Typo="Typo.h6">Display Timezone</MudText></CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudSelect @bind-Value="_timezone" Label="Timezone" Variant="Variant.Outlined"
+                           FullWidth="true" Class="mb-3">
+                    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+                    {
+                        <MudSelectItem Value="@tz.Id">@tz.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveTimezone">Save</MudButton>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+</MudGrid>
 
 @code {
     string _username = "", _password = "", _twoFaCode = "", _apiKey = "", _timezone = "UTC";
-    string? _message;
+    bool _busy;
 
     protected override async Task OnInitializedAsync()
     {
@@ -56,18 +102,37 @@ else
 
     async Task Login()
     {
-        _message = "Connecting...";
-        await Session.BeginLoginAsync(_username, _password);
-        _message = Session.State == LoginState.AwaitingTwoFactor ? "Enter 2FA code" : null;
+        _busy = true;
+        var state = await Session.BeginLoginAsync(_username, _password);
+        _busy = false;
+        switch (state)
+        {
+            case LoginState.AwaitingTwoFactor:
+                Snackbar.Add("Enter your 2FA code", Severity.Info);
+                break;
+            case LoginState.LoggedIn:
+                Snackbar.Add("Logged in successfully!", Severity.Success);
+                break;
+            default:
+                Snackbar.Add("Login failed — check your Steam username and password", Severity.Error);
+                break;
+        }
     }
 
     async Task Submit2Fa()
     {
+        _busy = true;
         var ok = await Session.SubmitTwoFactorCodeAsync(_twoFaCode);
-        _message = ok ? null : "Invalid code";
+        _busy = false;
+        if (ok) Snackbar.Add("Steam session established!", Severity.Success);
+        else Snackbar.Add("Invalid 2FA code — try again", Severity.Error);
     }
 
-    async Task Logout() { await Session.LogoutAsync(); _message = null; }
+    async Task Logout()
+    {
+        await Session.LogoutAsync();
+        Snackbar.Add("Logged out", Severity.Info);
+    }
 
     async Task SaveApiKey()
     {
@@ -75,14 +140,14 @@ else
         cfg.WebApiKey = _apiKey;
         if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
         await Db.SaveChangesAsync();
-        _message = "API key saved";
+        Snackbar.Add("API key saved", Severity.Success);
     }
 
     async Task SaveTimezone()
     {
         var cfg = await Db.SteamConfigs.FirstOrDefaultAsync();
         if (cfg != null) { cfg.DisplayTimezone = _timezone; await Db.SaveChangesAsync(); }
-        _message = "Timezone saved";
+        Snackbar.Add("Timezone saved", Severity.Success);
     }
 
     public void Dispose() => Session.StateChanged -= StateHasChanged;

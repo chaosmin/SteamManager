@@ -3,40 +3,92 @@
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
 @inject IUnlockSchedulerService SchedulerService
-@inject NavigationManager Nav
+@inject ISnackbar Snackbar
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
 @using SteamManager.Core.Models
 @using Microsoft.EntityFrameworkCore
 
-<h3>Games</h3>
+<MudText Typo="Typo.h4" Class="mb-4">Games</MudText>
 
-<div>
-    <input @bind="_newAppId" placeholder="App ID" type="number" />
-    <input @bind="_newName" placeholder="Game name" />
-    <input @bind="_targetHours" placeholder="Target hours" type="number" />
-    <input type="checkbox" @bind="_enableAchievements" /> Achievements
-    <button @onclick="AddGame">Add</button>
-</div>
+<MudCard Elevation="2" Class="mb-6">
+    <MudCardHeader>
+        <CardHeaderContent><MudText Typo="Typo.h6">Add Game</MudText></CardHeaderContent>
+    </MudCardHeader>
+    <MudCardContent>
+        <MudGrid>
+            <MudItem xs="12" sm="3">
+                <MudNumericField @bind-Value="_newAppId" Label="App ID" Variant="Variant.Outlined" FullWidth="true" />
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_newName" Label="Game Name" Variant="Variant.Outlined" FullWidth="true" />
+            </MudItem>
+            <MudItem xs="12" sm="2">
+                <MudNumericField @bind-Value="_targetHours" Label="Target Hours" Variant="Variant.Outlined" FullWidth="true" />
+            </MudItem>
+            <MudItem xs="12" sm="2" Class="d-flex align-center">
+                <MudCheckBox @bind-Value="_enableAchievements" Label="Achievements" Color="Color.Primary" />
+            </MudItem>
+            <MudItem xs="12" sm="1" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddGame" FullWidth="true">Add</MudButton>
+            </MudItem>
+        </MudGrid>
+    </MudCardContent>
+</MudCard>
 
-@foreach (var game in _games)
-{
-    <div style="border:1px solid #ccc;margin:8px;padding:8px">
-        <strong>@game.Name</strong> (AppId: @game.AppId) — Status: @game.Status
-        @if (game.Status == GameStatus.Idle)
-        {
-            <button @onclick="() => StartGame(game.AppId)">Start</button>
-        }
-        else if (game.Status == GameStatus.Running)
-        {
-            <button @onclick="() => StopGame(game.AppId)">Stop</button>
-        }
-    </div>
-}
+<MudTable Items="_games" Hover="true" Elevation="2" Dense="false">
+    <HeaderContent>
+        <MudTh>Game</MudTh>
+        <MudTh>App ID</MudTh>
+        <MudTh>Progress</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>
+            <MudText Typo="Typo.body1">@context.Name</MudText>
+            @if (context.EnableAchievements)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Class="ml-1">Achievements</MudChip>
+            }
+        </MudTd>
+        <MudTd><MudText Typo="Typo.body2" Color="Color.Secondary">@context.AppId</MudText></MudTd>
+        <MudTd>
+            @{
+                var min = context.Progress?.AccumulatedMinutes ?? 0;
+                var tgt = (int)(context.TargetHours * 60);
+                var pct = tgt > 0 ? Math.Min(100, min * 100 / tgt) : 0;
+            }
+            <MudText Typo="Typo.caption">@($"{min / 60.0:F1}h") / @context.TargetHours h</MudText>
+            <MudProgressLinear Value="@pct" Color="Color.Primary" Rounded="true" Size="Size.Small" Class="mt-1" />
+        </MudTd>
+        <MudTd>
+            <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Status)">@context.Status</MudChip>
+        </MudTd>
+        <MudTd>
+            @if (context.Status == GameStatus.Idle)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success"
+                               OnClick="@(() => StartGame(context.AppId))" />
+            }
+            else if (context.Status == GameStatus.Running)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error"
+                               OnClick="@(() => StopGame(context.AppId))" />
+            }
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No games added yet.</MudText>
+    </NoRecordsContent>
+</MudTable>
 
 @code {
     List<GameConfig> _games = [];
-    int _newAppId; string _newName = ""; decimal _targetHours = 10; bool _enableAchievements = true;
+    int _newAppId;
+    string _newName = "";
+    decimal _targetHours = 10;
+    bool _enableAchievements = true;
 
     protected override async Task OnInitializedAsync()
     {
@@ -45,7 +97,11 @@
 
     async Task AddGame()
     {
-        if (_newAppId == 0 || string.IsNullOrWhiteSpace(_newName)) return;
+        if (_newAppId == 0 || string.IsNullOrWhiteSpace(_newName))
+        {
+            Snackbar.Add("App ID and game name are required", Severity.Warning);
+            return;
+        }
         var game = new GameConfig
         {
             AppId = _newAppId, Name = _newName,
@@ -54,14 +110,24 @@
         Db.GameConfigs.Add(game);
         await Db.SaveChangesAsync();
         _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+        Snackbar.Add($"{_newName} added", Severity.Success);
+        _newAppId = 0; _newName = "";
     }
 
     async Task StartGame(int appId)
     {
-        await IdleService.StartAsync(appId);
-        var game = _games.First(g => g.AppId == appId);
-        if (game.EnableAchievements) await SchedulerService.StartAsync(appId);
-        _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+        try
+        {
+            await IdleService.StartAsync(appId);
+            var game = _games.First(g => g.AppId == appId);
+            if (game.EnableAchievements) await SchedulerService.StartAsync(appId);
+            _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+            Snackbar.Add("Game started", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to start: {ex.Message}", Severity.Error);
+        }
     }
 
     async Task StopGame(int appId)
@@ -69,5 +135,13 @@
         await IdleService.StopAsync(appId);
         await SchedulerService.StopAsync(appId);
         _games = await Db.GameConfigs.Include(g => g.Progress).ToListAsync();
+        Snackbar.Add("Game stopped", Severity.Info);
     }
+
+    Color StatusColor(GameStatus s) => s switch
+    {
+        GameStatus.Running => Color.Success,
+        GameStatus.Completed => Color.Info,
+        _ => Color.Default
+    };
 }

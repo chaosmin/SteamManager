@@ -1,21 +1,32 @@
 @page "/login"
 
-<div style="display:flex;justify-content:center;align-items:center;height:100vh">
-    <div style="width:320px">
-        <h3>SteamManager</h3>
-        <form method="post" action="/api/login">
-            <div style="margin-bottom:8px">
-                <input type="password" name="password" placeholder="Access password"
-                       style="width:100%;padding:8px;box-sizing:border-box" autofocus />
-            </div>
-            @if (ShowError)
-            {
-                <p style="color:red;margin:4px 0">Incorrect password</p>
-            }
-            <button type="submit" style="width:100%;padding:8px">Enter</button>
-        </form>
-    </div>
-</div>
+<MudContainer MaxWidth="MaxWidth.ExtraSmall" Class="d-flex align-center justify-center" Style="min-height:100vh">
+    <MudCard Elevation="8" Style="width:100%">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h5" Align="Align.Center">
+                    <MudIcon Icon="@Icons.Material.Filled.SportsEsports" Class="mr-2" />
+                    SteamManager
+                </MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            <form method="post" action="/api/login">
+                <MudTextField T="string" name="password" InputType="InputType.Password"
+                              Label="Access Password" Variant="Variant.Outlined"
+                              FullWidth="true" Class="mb-4" />
+                @if (ShowError)
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-3">Incorrect password</MudAlert>
+                }
+                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled"
+                           Color="Color.Primary" FullWidth="true" Size="Size.Large">
+                    Enter
+                </MudButton>
+            </form>
+        </MudCardContent>
+    </MudCard>
+</MudContainer>
 
 @code {
     [SupplyParameterFromQuery(Name = "error")]
