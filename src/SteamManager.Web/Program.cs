@@ -72,6 +72,24 @@ app.UseMiddleware<UiAuthMiddleware>();
 app.UseStaticFiles();
 app.UseAntiforgery();
 
+// Minimal API login endpoint — sets auth cookie and redirects
+// (HttpContext is unavailable in Blazor 8 Interactive Server rendering)
+app.MapPost("/api/login", (HttpContext ctx, IConfiguration cfg) =>
+{
+    var password = cfg["UI_ACCESS_PASSWORD"]
+        ?? Environment.GetEnvironmentVariable("UI_ACCESS_PASSWORD") ?? "";
+    var input = ctx.Request.Form["password"].ToString();
+    var expected = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(password);
+    var inputHash = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(input);
+    if (inputHash == expected)
+    {
+        ctx.Response.Cookies.Append("ui_auth", expected,
+            new CookieOptions { Expires = DateTimeOffset.UtcNow.AddDays(30), HttpOnly = true, SameSite = SameSiteMode.Lax });
+        return Results.Redirect("/");
+    }
+    return Results.Redirect("/login?error=1");
+});
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

@@ -1,34 +1,25 @@
 @page "/login"
-@inject IConfiguration Config
-@inject NavigationManager Nav
-@inject IHttpContextAccessor HttpCtx
 
-<h3>Login</h3>
-<input type="password" @bind="_password" placeholder="Access password" />
-<button @onclick="Submit">Enter</button>
-@if (_error != null) { <p style="color:red">@_error</p> }
+<div style="display:flex;justify-content:center;align-items:center;height:100vh">
+    <div style="width:320px">
+        <h3>SteamManager</h3>
+        <form method="post" action="/api/login">
+            <div style="margin-bottom:8px">
+                <input type="password" name="password" placeholder="Access password"
+                       style="width:100%;padding:8px;box-sizing:border-box" autofocus />
+            </div>
+            @if (ShowError)
+            {
+                <p style="color:red;margin:4px 0">Incorrect password</p>
+            }
+            <button type="submit" style="width:100%;padding:8px">Enter</button>
+        </form>
+    </div>
+</div>
 
 @code {
-    string _password = "";
-    string? _error;
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
 
-    void Submit()
-    {
-        var stored = Config["UI_ACCESS_PASSWORD"]
-            ?? Environment.GetEnvironmentVariable("UI_ACCESS_PASSWORD");
-        if (string.IsNullOrWhiteSpace(stored)) { Nav.NavigateTo("/"); return; }
-
-        var hash = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(stored);
-        var input = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(_password);
-        if (input == hash)
-        {
-            HttpCtx.HttpContext!.Response.Cookies.Append("ui_auth", hash,
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddDays(30), HttpOnly = true });
-            Nav.NavigateTo("/");
-        }
-        else
-        {
-            _error = "Incorrect password";
-        }
-    }
+    bool ShowError => !string.IsNullOrEmpty(Error);
 }

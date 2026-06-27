@@ -23,9 +23,8 @@ public class UiAuthMiddleware(RequestDelegate next, IConfiguration config)
         if (path.StartsWith("/login", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("/_framework", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/css", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/js", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/favicon", StringComparison.OrdinalIgnoreCase))
+            path.StartsWith("/api/login", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(Path.GetExtension(path)))
         {
             await next(ctx);
             return;
