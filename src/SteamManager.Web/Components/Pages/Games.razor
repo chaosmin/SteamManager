@@ -198,10 +198,7 @@ else
 
             var game = _games.FirstOrDefault(g => g.AppId == appId);
             if (game != null)
-            {
-                Snackbar.Add("Refreshing achievements...", Severity.Info);
-                await AchievementService.LoadAchievementsAsync(game.Id, appId);
-            }
+                _ = Task.Run(() => AchievementService.LoadAchievementsAsync(game.Id, appId));
             await IdleService.StartAsync(appId);
             await SchedulerService.StartAsync(appId);
             _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
