@@ -21,6 +21,9 @@ public class Game
     // Achievement cache freshness
     public DateTime? AchievementsCachedAt { get; set; }  // UTC
 
+    // Steam trading card drops remaining (null = not yet synced)
+    public int? DropsRemaining { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

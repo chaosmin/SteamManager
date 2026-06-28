@@ -6,5 +6,6 @@ public record SteamAchievementDto(
     double GlobalPercent,
     long? UnlockTime,       // Unix timestamp; null if locked
     string? IconUrl = null,
-    string? IconGrayUrl = null
+    string? IconGrayUrl = null,
+    string? Description = null
 );

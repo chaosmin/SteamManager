@@ -4,49 +4,119 @@ using SteamKit2.Internal;
 
 namespace SteamManager.Infrastructure.Steam;
 
-public class AchievementHandler(SteamClientWrapper steam, ILogger<AchievementHandler> logger)
+public class AchievementHandler
 {
-    public Task<bool> UnlockAchievementAsync(int appId, string achievementId, CancellationToken ct = default)
+    private readonly SteamClientWrapper _steam;
+    private readonly ILogger<AchievementHandler> _logger;
+
+    public AchievementHandler(SteamClientWrapper steam, ILogger<AchievementHandler> logger)
+    {
+        _steam = steam;
+        _logger = logger;
+    }
+
+    public async Task<bool> UnlockAchievementAsync(int appId, string achievementId, CancellationToken ct = default)
     {
         try
         {
-            // SteamKit2 3.x: send ClientGamesPlayed with the app to ensure it is "running",
-            // then send a ClientStoreUserStats2 with stat_id derived from the achievement API name hash.
-            // Achievement stat IDs in Steam are CRC32 of the achievement API name (lowercase).
-            var statId = Crc32(achievementId.ToLowerInvariant());
+            // Step 1: Fetch current stats + schema. Steam validates crc_stats on the store request.
+            var statsResponse = await _steam.GetUserStatsAsync((uint)appId, ct);
+            if (statsResponse.eresult != 1)
+            {
+                _logger.LogWarning("GetUserStats failed for app {AppId}: eresult={EResult}", appId, statsResponse.eresult);
+                return false;
+            }
+
+            // Step 2: Parse the binary KeyValue schema to find which stat block and bit position
+            // correspond to this achievement. Achievements are bit-fields inside type=4 stats.
+            if (!FindAchievementBit(achievementId, statsResponse, out var statId, out var bitNum, out var currentValue))
+            {
+                _logger.LogWarning("Achievement {AchId} not found in schema for app {AppId} (schema bytes={Bytes})",
+                    achievementId, appId, statsResponse.schema?.Length ?? 0);
+                return false;
+            }
+
+            // Step 3: Set the bit (preserve other bits in the same stat block).
+            var newValue = currentValue | ((uint)1 << bitNum);
 
             var storeRequest = new ClientMsgProtobuf<CMsgClientStoreUserStats2>(EMsg.ClientStoreUserStats2);
             storeRequest.Body.game_id = (ulong)appId;
+            storeRequest.Body.settor_steam_id = _steam.Client.SteamID;
+            storeRequest.Body.settee_steam_id = _steam.Client.SteamID;
             storeRequest.Body.explicit_reset = false;
+            storeRequest.Body.crc_stats = statsResponse.crc_stats;
             storeRequest.Body.stats.Add(new CMsgClientStoreUserStats2.Stats
             {
-                stat_id = statId,
-                stat_value = 1,
+                stat_id    = statId,
+                stat_value = newValue,
             });
-            steam.Client.Send(storeRequest);
+            _steam.Client.Send(storeRequest);
 
-            logger.LogInformation("Sent unlock for achievement {AchId} (stat_id={StatId}) in app {AppId}",
-                achievementId, statId, appId);
-            return Task.FromResult(true);
+            _logger.LogInformation(
+                "Sent unlock for {AchId} (stat_id={StatId} bit={Bit} old={Old} new={New} crc={Crc}) app {AppId}",
+                achievementId, statId, bitNum, currentValue, newValue, statsResponse.crc_stats, appId);
+            return true;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to unlock achievement {AchId} in app {AppId}", achievementId, appId);
-            return Task.FromResult(false);
+            _logger.LogError(ex, "Failed to unlock achievement {AchId} in app {AppId}", achievementId, appId);
+            return false;
         }
     }
 
-    // CRC32 of achievement API name — matches Steam's internal stat ID derivation
-    private static uint Crc32(string input)
+    /// <summary>
+    /// Parses the binary KeyValue schema returned by GetUserStats to find the parent stat block
+    /// (type=4 / ACHIEVEMENTS) and bit position for the given achievement API name.
+    /// </summary>
+    private bool FindAchievementBit(
+        string achievementId,
+        CMsgClientGetUserStatsResponse statsResponse,
+        out uint statId, out int bitNum, out uint currentValue)
     {
-        const uint poly = 0xEDB88320u;
-        uint crc = 0xFFFFFFFFu;
-        foreach (var b in System.Text.Encoding.UTF8.GetBytes(input))
+        statId = 0; bitNum = 0; currentValue = 0;
+
+        var schemaBytes = statsResponse.schema;
+        if (schemaBytes == null || schemaBytes.Length == 0)
         {
-            crc ^= b;
-            for (int i = 0; i < 8; i++)
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ poly : crc >> 1;
+            _logger.LogWarning("Empty schema returned by GetUserStats");
+            return false;
         }
-        return ~crc;
+
+        var schema = new KeyValue();
+        using var ms = new MemoryStream(schemaBytes);
+        if (!schema.TryReadAsBinary(ms))
+        {
+            _logger.LogWarning("Failed to parse schema binary KeyValue");
+            return false;
+        }
+
+        // Schema root → "stats" node → numbered children (each is a stat block).
+        var statsNode = schema["stats"];
+        var statChildren = statsNode == KeyValue.Invalid ? schema.Children : statsNode.Children;
+
+        foreach (var stat in statChildren)
+        {
+            if (!uint.TryParse(stat.Name, out var statNum)) continue;
+
+            var typeVal = stat["type"].Value ?? string.Empty;
+            if (typeVal != "4" && !typeVal.Equals("ACHIEVEMENTS", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var bitsNode = stat["bits"];
+            if (bitsNode == KeyValue.Invalid) continue;
+
+            foreach (var bit in bitsNode.Children)
+            {
+                if (!int.TryParse(bit.Name, out var bn)) continue;
+                var name = bit["name"].Value ?? string.Empty;
+                if (!string.Equals(name, achievementId, StringComparison.OrdinalIgnoreCase)) continue;
+
+                statId = statNum;
+                bitNum = bn;
+                var found = statsResponse.stats.Find(s => s.stat_id == statNum);
+                currentValue = found?.stat_value ?? 0;
+                return true;
+            }
+        }
+        return false;
     }
 }

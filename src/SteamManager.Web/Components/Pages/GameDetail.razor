@@ -34,14 +34,10 @@ else
     </div>
     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
         App ID: @_game.AppId &nbsp;|&nbsp;
-        Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @_game.TargetHours h
+        Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @(_game.ReferencePlayMinutes.HasValue ? $"{_game.ReferencePlayMinutes.Value / 60.0:F2}h" : $"{_game.TargetHours}h")
         @if (_total > 0)
         {
             <span> &nbsp;|&nbsp; Achievements: @_unlocked / @_total unlocked</span>
-        }
-        @if (_game.ReferencePlayMinutes.HasValue)
-        {
-            <span> &nbsp;|&nbsp; 参考完成时长: @($"{_game.ReferencePlayMinutes.Value / 60.0:F2}h")</span>
         }
         @if (_game.AchievementsCachedAt.HasValue)
         {
@@ -90,7 +86,13 @@ else
                 </MudTd>
                 <MudTd>
                     <MudText Typo="Typo.body2">@(context.DisplayNameI18n ?? context.DisplayName)</MudText>
-                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">@context.ApiName</MudText>
+                    @{
+                        var desc = context.DescriptionI18n ?? context.Description;
+                    }
+                    @if (!string.IsNullOrWhiteSpace(desc))
+                    {
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">@desc</MudText>
+                    }
                 </MudTd>
                 <MudTd>
                     <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60.0:F2}h")</MudText>

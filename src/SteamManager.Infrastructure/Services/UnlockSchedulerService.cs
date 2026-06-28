@@ -10,6 +10,7 @@ namespace SteamManager.Infrastructure.Services;
 
 public class UnlockSchedulerService(
     AchievementHandler handler,
+    AchievementUnlockNotifier notifier,
     IServiceScopeFactory scopeFactory,
     IConfiguration config,
     ILogger<UnlockSchedulerService> logger) : IUnlockSchedulerService
@@ -121,11 +122,18 @@ public class UnlockSchedulerService(
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var ach = await db.Achievements.FindAsync([achievementId], ct);
+        var ach = await db.Achievements
+            .Include(a => a.Game)
+            .FirstOrDefaultAsync(a => a.Id == achievementId, ct);
         if (ach == null) return;
         ach.IsUnlocked = true;
         ach.UnlockedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
+
+        notifier.Notify(new UnlockedAchievementInfo(
+            GameName: ach.Game.NameI18n ?? ach.Game.Name,
+            AchievementName: ach.DisplayNameI18n ?? ach.DisplayName,
+            IconUrl: ach.IconUrl));
     }
 
     public static int ApplyJitter(int baseMs, int jitterPercent)

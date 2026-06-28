@@ -14,7 +14,7 @@
 
 <MudGrid>
     <MudItem xs="12" md="6">
-        <MudCard Elevation="2">
+        <MudCard Elevation="2" Class="mb-4">
             <MudCardHeader>
                 <CardHeaderContent>
                     <MudText Typo="Typo.h6">
@@ -56,10 +56,8 @@
                 }
             </MudCardContent>
         </MudCard>
-    </MudItem>
 
-    <MudItem xs="12" md="6">
-        <MudCard Elevation="2" Class="mb-4">
+        <MudCard Elevation="2">
             <MudCardHeader>
                 <CardHeaderContent><MudText Typo="Typo.h6">Steam Web API Key</MudText></CardHeaderContent>
             </MudCardHeader>
@@ -70,40 +68,9 @@
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveApiKey">Save</MudButton>
             </MudCardContent>
         </MudCard>
+    </MudItem>
 
-        <MudCard Elevation="2" Class="mb-4">
-            <MudCardHeader>
-                <CardHeaderContent><MudText Typo="Typo.h6">Display Timezone</MudText></CardHeaderContent>
-            </MudCardHeader>
-            <MudCardContent>
-                <MudSelect @bind-Value="_timezone" Label="Timezone" Variant="Variant.Outlined"
-                           FullWidth="true" Class="mb-3">
-                    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
-                    {
-                        <MudSelectItem Value="@tz.Id">@tz.DisplayName</MudSelectItem>
-                    }
-                </MudSelect>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveTimezone">Save</MudButton>
-            </MudCardContent>
-        </MudCard>
-
-        <MudCard Elevation="2" Class="mb-4">
-            <MudCardHeader>
-                <CardHeaderContent><MudText Typo="Typo.h6">Language / 语言</MudText></CardHeaderContent>
-            </MudCardHeader>
-            <MudCardContent>
-                <MudSelect @bind-Value="_language" Label="Display Language" Variant="Variant.Outlined"
-                           FullWidth="true" Class="mb-3">
-                    <MudSelectItem Value="@("english")">English</MudSelectItem>
-                    <MudSelectItem Value="@("schinese")">简体中文</MudSelectItem>
-                </MudSelect>
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
-                    Game and achievement names will use Steam's official translation. Falls back to English when no translation is available.
-                </MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveLanguage">Save</MudButton>
-            </MudCardContent>
-        </MudCard>
-
+    <MudItem xs="12" md="6">
         <MudCard Elevation="2">
             <MudCardHeader>
                 <CardHeaderContent><MudText Typo="Typo.h6">Background Sync</MudText></CardHeaderContent>
@@ -130,7 +97,6 @@
                     </MudButton>
                 </div>
 
-                <!-- Progress area — always visible once sync has run -->
                 @if (SyncService.IsSyncing || SyncService.SyncStatusMessage != null)
                 {
                     <MudProgressLinear Value="@SyncService.SyncProgress"
@@ -146,8 +112,7 @@
 </MudGrid>
 
 @code {
-    string _username = "", _password = "", _twoFaCode = "", _apiKey = "", _timezone = "UTC";
-    string _language = "english";
+    string _username = "", _password = "", _twoFaCode = "", _apiKey = "";
     string _syncCron = "0 0 * * *";
     string? _cronError;
     bool _busy;
@@ -161,11 +126,8 @@
         if (cfg != null)
         {
             _apiKey = cfg.WebApiKey ?? "";
-            _timezone = cfg.DisplayTimezone;
             _syncCron = cfg.SyncCron;
-            _language = cfg.Language ?? "english";
         }
-        else _timezone = Environment.GetEnvironmentVariable("TZ") ?? "UTC";
     }
 
     void OnSessionChanged() => InvokeAsync(StateHasChanged);
@@ -206,22 +168,6 @@
         if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
         await Db.SaveChangesAsync();
         Snackbar.Add("API key saved", Severity.Success);
-    }
-
-    async Task SaveTimezone()
-    {
-        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync();
-        if (cfg != null) { cfg.DisplayTimezone = _timezone; await Db.SaveChangesAsync(); }
-        Snackbar.Add("Timezone saved", Severity.Success);
-    }
-
-    async Task SaveLanguage()
-    {
-        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamManager.Core.Models.SteamConfig();
-        cfg.Language = _language;
-        if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
-        await Db.SaveChangesAsync();
-        Snackbar.Add("Language saved — re-sync to apply to game/achievement names", Severity.Success);
     }
 
     async Task SaveSyncCron()

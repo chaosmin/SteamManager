@@ -57,11 +57,14 @@ public class AchievementDataService(
                 {
                     row.DisplayName = ach.DisplayName;
                     row.DisplayNameI18n = null;
+                    row.Description = ach.Description;
+                    row.DescriptionI18n = null;
                 }
                 else
                 {
                     row.DisplayNameI18n = ach.DisplayName;
-                    // DisplayName (English) preserved — not overwritten
+                    row.DescriptionI18n = ach.Description;
+                    // English DisplayName/Description preserved — not overwritten
                 }
                 row.GlobalPercent = ach.GlobalPercent;
                 row.IconUrl = ach.IconUrl;
@@ -75,8 +78,10 @@ public class AchievementDataService(
                     GameId = gameId,
                     AppId = appId,
                     ApiName = ach.ApiName,
-                    DisplayName = ach.DisplayName,  // best-effort fallback on first insert
+                    DisplayName = ach.DisplayName,
                     DisplayNameI18n = language != "english" ? ach.DisplayName : null,
+                    Description = ach.Description,
+                    DescriptionI18n = language != "english" ? ach.Description : null,
                     GlobalPercent = ach.GlobalPercent,
                     IconUrl = ach.IconUrl,
                     IconGrayUrl = ach.IconGrayUrl,

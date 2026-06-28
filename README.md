@@ -11,12 +11,17 @@ A self-hosted Steam automation service that idles game hours and unlocks achieve
 ## Features
 
 - **Game Hour Idling** — simulates gameplay to accumulate hours toward a configurable target
-- **Achievement Auto-Unlock** — derives unlock timing from [SteamHunters](https://steamhunters.com) median completion data; falls back to global unlock percentage ordering when unavailable
-- **Catch-up on Restart** — overdue achievements are unlocked in sequence (with 1–100 s random gaps) the moment a game session resumes
+- **Achievement Auto-Unlock** — two-step `GetUserStats → StoreUserStats2` protocol; derives unlock timing from [SteamHunters](https://steamhunters.com) median completion data; falls back to global unlock percentage ordering
+- **In-app Achievement Toast** — popup notification (with icon) when an achievement is unlocked, matching Steam overlay style
+- **Catch-up on Restart** — overdue achievements unlock in sequence (1–100 s random gaps) the moment a game session resumes
 - **Checkpoint Resume** — tracks progress per-minute in MySQL; restarts pick up exactly where you left off
-- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores automatically on every startup
-- **Multi-language UI** — game and achievement names displayed in English or Simplified Chinese (Steam's official localizations, English fallback)
-- **Background Sync** — scheduled (cron) or on-demand sync refreshes your library and all achievement data in one click
+- **Steam Trading Card Drops** — tracks remaining card drops per game via Steam Community badge page; filter toggle on Games page; synced automatically with library sync
+- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores on every startup
+- **Dashboard** — two live summary panels (total remaining idle time + remaining achievements across all games); currently playing section with cover art, idle progress, achievement progress, and next-achievement countdown; auto-refreshes every minute
+- **Single-game Enforcement** — starting a new game automatically stops the previously running game
+- **Multi-language UI** — game and achievement names in English or Simplified Chinese (Steam's official localizations, English fallback); language selector in the top nav bar
+- **Timezone** — display timezone selector in the top nav bar, applied globally
+- **Background Sync** — scheduled (cron) or on-demand sync refreshes your library, achievement data, and card drops in one click
 - **Web UI** — Blazor Server dark-theme dashboard with real-time progress, game management, search/filter, and an optional access password
 
 ## Tech Stack
@@ -82,33 +87,41 @@ Open `http://your-host:8080` → go to **Settings** → log in with your Steam c
 
 ### Adding games
 
-Games are added automatically when you click **Sync Now** in Settings — it imports your entire Steam library. You can also add individual games manually via the Games page.
+Click **Sync Library** on the Games page to import your entire Steam library. This also syncs remaining trading card drops per game. Requires a Steam Web API key (save it in **Settings → Steam Web API Key**).
 
-### Refreshing achievement data
+### Dashboard
 
-Open a game's detail page and click **Refresh**. This fetches:
-1. Achievement schema from Steam (names, icons, global unlock rates) in your chosen language
-2. Median completion time from SteamHunters to derive realistic unlock offsets
-3. Your own current unlock status from Steam
+The dashboard shows:
+- **Remaining Idle Time** — total hours left across all games, with an overall progress bar
+- **Remaining Achievements** — total achievements left across all games, with an overall progress bar
+- **Currently Playing** — if a game is running: cover art, remaining idle time, achievement progress, and a countdown to the next scheduled achievement unlock
+
+The dashboard auto-refreshes every minute. Live idle-time updates stream in real time via SignalR.
+
+### Starting / stopping games
+
+Go to **Games** and click the play button on any game card. Only one game can run at a time — starting a new game automatically stops the current one.
+
+### Trading card drops
+
+The **Card drops remaining** filter on the Games page shows only games with drops left. Card drop counts are refreshed automatically during **Sync Library**.
 
 ### Achievement scheduling
 
 When a game is started, SteamManager:
 
-1. Distributes achievement unlock times proportionally across the SteamHunters median completion window
-2. On start, immediately unlocks any achievements whose offset has already been passed (catch-up), with 1–100 s random gaps between each
-3. During play, polls every ~30 s and unlocks newly-due achievements with a 1–100 s random pre-unlock delay
-4. Falls back to global unlock percentage ordering if SteamHunters data is unavailable
+1. Refreshes achievement data from Steam (ensuring schema is current)
+2. Immediately unlocks any overdue achievements (catch-up), with 1–100 s random gaps
+3. During play, polls every ~30 s and unlocks newly-due achievements with a 1–100 s pre-unlock delay
+4. Uses the correct two-step `CMsgClientGetUserStats → CMsgClientStoreUserStats2` protocol with binary KeyValue schema parsing — same approach as [ASFAchievementManager](https://github.com/CatPoweredPlugins/ASFAchievementManager)
 
-> A Steam Web API key is required for achievement data. Get one at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) and save it in **Settings**.
+### Language & Timezone
+
+Both are accessible in the **top navigation bar** on every page. Changes apply immediately and persist without going to Settings.
 
 ### Background sync
 
-Configure a **cron schedule** in Settings (default: daily at midnight) for automatic library + achievement sync. Use **Sync Now** to trigger immediately. A progress bar shows per-game status in real time.
-
-### Language
-
-Set your preferred display language in Settings → Language. Supports **English** and **简体中文**. Steam's official localizations are used; English is the fallback when no translation exists for a game or achievement.
+Configure a **cron schedule** in Settings (default: daily at midnight) for automatic library + achievement sync. Use **Sync Now** to trigger immediately.
 
 ## Configuration Reference
 
@@ -129,11 +142,11 @@ src/
 ├── SteamManager.Web/          # Blazor Server app, middleware, DI wiring
 ├── SteamManager.Core/         # Domain models, service interfaces, business logic
 │   ├── Models/                # EF entities (Game, Achievement, SteamConfig)
-│   ├── Services/              # Session, idle, scheduler, sync, achievement calculator
+│   ├── Services/              # Session, idle, scheduler, sync, notifier
 │   └── Dto/                   # Data transfer objects
 └── SteamManager.Infrastructure/
-    ├── Steam/                 # SteamClientWrapper (SteamKit2), AchievementHandler
-    ├── Http/                  # Steam Web API client, SteamHunters client
+    ├── Steam/                 # SteamClientWrapper, AchievementHandler, UserStatsHandler
+    ├── Http/                  # SteamWebApiClient, SteamHuntersClient, SteamCommunityClient
     ├── Crypto/                # AES-256 encryption utility
     └── Persistence/           # AppDbContext, EF Core migrations
 tests/
@@ -144,7 +157,6 @@ tests/
 ## Building from Source
 
 ```bash
-# Install .NET 8 SDK
 dotnet restore
 dotnet build
 dotnet test
@@ -160,7 +172,25 @@ dotnet run --project src/SteamManager.Web
 docker pull chaosmin/steam-manager:latest
 ```
 
-Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.0`).
+Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.1`).
+
+## Changelog
+
+### v0.2.1
+- Fix achievement unlock: proper two-step `GetUserStats → StoreUserStats2` with binary KeyValue schema parsing
+- Add in-app achievement unlock toast (icon + game name)
+- Add Steam trading card drops tracking and filter toggle on Games page
+- Redesign Dashboard: global summary panels + currently playing with next-achievement countdown + 1-min auto-refresh
+- Enforce single-game: starting a game auto-stops the current one
+- Move Language and Timezone selectors to top nav bar
+- Reorganize Settings: Web API Key moved under Steam Account
+- Add achievement description display in GameDetail
+
+### v0.2.0
+- Multi-language support (English / 简体中文)
+- Achievement unlock scheduling with SteamHunters data
+- Global background sync with cron schedule
+- MudBlazor Material Design UI
 
 ## Acknowledgements
 

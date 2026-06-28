@@ -85,6 +85,7 @@ public class SteamSessionService(
             {
                 DisplayName = steam.SteamFriends.GetPersonaName();
                 SteamId64 = steam.Client.SteamID;
+                steam.SteamFriends.SetPersonaState(EPersonaState.Online);
                 SetState(LoginState.LoggedIn);
                 return true;
             }
@@ -187,7 +188,10 @@ public class SteamSessionService(
         sub.Dispose();
 
         if (state == LoginState.LoggedIn)
+        {
             await PersistSessionAsync(pollResult.RefreshToken, ct);
+            steam.SteamFriends.SetPersonaState(EPersonaState.Online);
+        }
 
         SetState(state);
         return state;

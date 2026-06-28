@@ -37,6 +37,7 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 // Steam + Core services
 builder.Services.AddSingleton<SteamClientWrapper>();
 builder.Services.AddSingleton<AchievementHandler>();
+builder.Services.AddSingleton<AchievementUnlockNotifier>();
 builder.Services.AddSingleton<ISteamSessionService, SteamSessionService>();
 builder.Services.AddSingleton<IGameIdleService, GameIdleService>();
 builder.Services.AddSingleton<IUnlockSchedulerService, UnlockSchedulerService>();
@@ -49,6 +50,7 @@ builder.Services.AddSingleton<ISyncService>(sp => sp.GetRequiredService<SyncBack
 // HTTP clients
 builder.Services.AddHttpClient<SteamWebApiClient>();
 builder.Services.AddHttpClient<SteamHuntersClient>();
+builder.Services.AddHttpClient<SteamCommunityClient>();
 
 // MudBlazor
 builder.Services.AddMudServices();

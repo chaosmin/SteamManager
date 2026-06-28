@@ -8,6 +8,8 @@ public class Achievement
     public string ApiName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? DisplayNameI18n { get; set; }
+    public string? Description { get; set; }
+    public string? DescriptionI18n { get; set; }
     public double GlobalPercent { get; set; }
     public string? IconUrl { get; set; }
     public string? IconGrayUrl { get; set; }

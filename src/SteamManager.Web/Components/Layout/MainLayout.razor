@@ -1,4 +1,13 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject AchievementUnlockNotifier UnlockNotifier
+@inject ISnackbar Snackbar
+@inject IServiceScopeFactory ScopeFactory
+@using SteamManager.Core.Services
+@using SteamManager.Infrastructure.Persistence
+@using SteamManager.Core.Models
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.DependencyInjection
 
 <MudThemeProvider Theme="_theme" IsDarkMode="true" />
 <MudPopoverProvider />
@@ -10,6 +19,23 @@
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
                        OnClick="@(() => _drawerOpen = !_drawerOpen)" />
         <MudText Typo="Typo.h6" Class="ml-2">SteamManager</MudText>
+        <MudSpacer />
+
+        <MudSelect Value="_language" ValueChanged="@ChangeLanguage" T="string"
+                   Variant="Variant.Text" Dense="true" DisableUnderLine="true"
+                   Style="min-width:110px;color:rgba(255,255,255,0.87)" Class="mr-3 mt-1">
+            <MudSelectItem Value="@("english")">English</MudSelectItem>
+            <MudSelectItem Value="@("schinese")">简体中文</MudSelectItem>
+        </MudSelect>
+
+        <MudSelect Value="_timezone" ValueChanged="@ChangeTimezone" T="string"
+                   Variant="Variant.Text" Dense="true" DisableUnderLine="true"
+                   Style="min-width:160px;color:rgba(255,255,255,0.87)" Class="mt-1">
+            @foreach (var (id, label) in _timezones)
+            {
+                <MudSelectItem Value="@id">@label</MudSelectItem>
+            }
+        </MudSelect>
     </MudAppBar>
 
     <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="2" Variant="DrawerVariant.Responsive">
@@ -25,6 +51,114 @@
 
 @code {
     bool _drawerOpen = true;
+    string _language = "english";
+    string _timezone = "UTC";
+
+    private static readonly (string Id, string Label)[] _timezones =
+    [
+        ("UTC",                 "UTC+0"),
+        ("Asia/Shanghai",       "UTC+8  上海"),
+        ("Asia/Hong_Kong",      "UTC+8  香港"),
+        ("Asia/Singapore",      "UTC+8  新加坡"),
+        ("Asia/Tokyo",          "UTC+9  东京"),
+        ("Asia/Seoul",          "UTC+9  首尔"),
+        ("Asia/Kolkata",        "UTC+5:30 印度"),
+        ("Asia/Dubai",          "UTC+4  迪拜"),
+        ("Europe/London",       "UTC+0  伦敦"),
+        ("Europe/Paris",        "UTC+1  巴黎"),
+        ("Europe/Berlin",       "UTC+1  柏林"),
+        ("Europe/Moscow",       "UTC+3  莫斯科"),
+        ("America/New_York",    "UTC-5  纽约"),
+        ("America/Chicago",     "UTC-6  芝加哥"),
+        ("America/Denver",      "UTC-7  丹佛"),
+        ("America/Los_Angeles", "UTC-8  洛杉矶"),
+        ("America/Sao_Paulo",   "UTC-3  圣保罗"),
+        ("Australia/Sydney",    "UTC+10 悉尼"),
+        ("Pacific/Auckland",    "UTC+12 奥克兰"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        UnlockNotifier.AchievementUnlocked += OnAchievementUnlocked;
+        using var scope = ScopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var cfg = await db.SteamConfigs.AsNoTracking().FirstOrDefaultAsync();
+        if (cfg != null)
+        {
+            _language = cfg.Language ?? "english";
+            _timezone = cfg.DisplayTimezone ?? "UTC";
+        }
+    }
+
+    private async Task ChangeLanguage(string value)
+    {
+        _language = value;
+        using var scope = ScopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var cfg = await db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamConfig();
+        cfg.Language = value;
+        if (cfg.Id == 0) db.SteamConfigs.Add(cfg);
+        await db.SaveChangesAsync();
+        Snackbar.Add("Language saved — re-sync to apply to game names", Severity.Info);
+    }
+
+    private async Task ChangeTimezone(string value)
+    {
+        _timezone = value;
+        using var scope = ScopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var cfg = await db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamConfig();
+        cfg.DisplayTimezone = value;
+        if (cfg.Id == 0) db.SteamConfigs.Add(cfg);
+        await db.SaveChangesAsync();
+        Snackbar.Add($"Timezone set to {value}", Severity.Info);
+    }
+
+    private void OnAchievementUnlocked(UnlockedAchievementInfo info)
+    {
+        InvokeAsync(() =>
+        {
+            Snackbar.Add(builder =>
+            {
+                builder.OpenElement(0, "div");
+                builder.AddAttribute(1, "style", "display:flex;align-items:center;gap:10px");
+
+                if (!string.IsNullOrEmpty(info.IconUrl))
+                {
+                    builder.OpenElement(2, "img");
+                    builder.AddAttribute(3, "src", info.IconUrl);
+                    builder.AddAttribute(4, "width", "40");
+                    builder.AddAttribute(5, "height", "40");
+                    builder.AddAttribute(6, "style", "border-radius:4px;flex-shrink:0");
+                    builder.CloseElement();
+                }
+
+                builder.OpenElement(7, "div");
+                builder.OpenElement(8, "div");
+                builder.AddAttribute(9, "style", "font-weight:600;font-size:0.9rem");
+                builder.AddContent(10, info.AchievementName);
+                builder.CloseElement();
+                builder.OpenElement(11, "div");
+                builder.AddAttribute(12, "style", "font-size:0.75rem;opacity:0.7");
+                builder.AddContent(13, info.GameName);
+                builder.CloseElement();
+                builder.CloseElement();
+
+                builder.CloseElement();
+            }, Severity.Success, options =>
+            {
+                options.VisibleStateDuration = 6000;
+                options.ShowTransitionDuration = 300;
+                options.HideTransitionDuration = 500;
+                options.SnackbarVariant = Variant.Filled;
+            });
+        });
+    }
+
+    public void Dispose()
+    {
+        UnlockNotifier.AchievementUnlocked -= OnAchievementUnlocked;
+    }
 
     readonly MudTheme _theme = new()
     {

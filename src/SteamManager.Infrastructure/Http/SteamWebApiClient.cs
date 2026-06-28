@@ -21,7 +21,8 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
                 a.GetProperty("displayName").GetString()!,
                 0.0, null,
                 a.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                a.TryGetProperty("icongray", out var ig) ? ig.GetString() : null))
+                a.TryGetProperty("icongray", out var ig) ? ig.GetString() : null,
+                a.TryGetProperty("description", out var desc) ? desc.GetString() : null))
             .ToList();
 
         await Task.Delay(CallDelay, ct);

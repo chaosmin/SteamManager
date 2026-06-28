@@ -7,6 +7,8 @@
 @inject NavigationManager Nav
 @inject ISteamSessionService Session
 @inject SteamWebApiClient SteamApi
+@inject IAchievementDataService AchievementService
+@inject SteamCommunityClient CommunityClient
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
 @using SteamManager.Infrastructure.Http
@@ -29,6 +31,7 @@
                   Immediate="true" />
     <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
     <MudSwitch @bind-Value="_onlyIncomplete" Color="Color.Secondary" Label="Not 100%" />
+    <MudSwitch @bind-Value="_onlyWithCardDrops" Color="Color.Warning" Label="Card drops remaining" />
 </div>
 
 @if (_games.Count == 0)
@@ -47,6 +50,7 @@ else
         .Where(g => !_onlyIncomplete ||
                     (g.Achievements.Count > 0 &&
                      g.Achievements.Count(a => a.IsUnlocked) < g.Achievements.Count))
+        .Where(g => !_onlyWithCardDrops || g.DropsRemaining > 0)
         .ToList();
 
     @if (filtered.Count == 0)
@@ -62,9 +66,11 @@ else
                 var achTotal = game.Achievements.Count;
                 var achDone = game.Achievements.Count(a => a.IsUnlocked);
 
-                var refMinutes = achTotal > 0
-                    ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
-                    : (int)(game.TargetHours * 60);
+                var refMinutes = game.ReferencePlayMinutes.HasValue && game.ReferencePlayMinutes.Value > 0
+                    ? game.ReferencePlayMinutes.Value
+                    : achTotal > 0
+                        ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
+                        : (int)(game.TargetHours * 60);
                 if (refMinutes == 0) refMinutes = (int)(game.TargetHours * 60);
 
                 double playGreenPct, playSecondPct;
@@ -170,6 +176,7 @@ else
     string _search = "";
     bool _onlyWithAchievements;
     bool _onlyIncomplete;
+    bool _onlyWithCardDrops;
 
     protected override async Task OnInitializedAsync()
     {
@@ -180,6 +187,21 @@ else
     {
         try
         {
+            // Stop any currently running game first
+            var currentlyRunning = _games.FirstOrDefault(g => g.Status == GameStatus.Running && g.AppId != appId);
+            if (currentlyRunning != null)
+            {
+                await IdleService.StopAsync(currentlyRunning.AppId);
+                await SchedulerService.StopAsync(currentlyRunning.AppId);
+                Snackbar.Add($"Stopped {currentlyRunning.NameI18n ?? currentlyRunning.Name}", Severity.Info);
+            }
+
+            var game = _games.FirstOrDefault(g => g.AppId == appId);
+            if (game != null)
+            {
+                Snackbar.Add("Refreshing achievements...", Severity.Info);
+                await AchievementService.LoadAchievementsAsync(game.Id, appId);
+            }
             await IdleService.StartAsync(appId);
             await SchedulerService.StartAsync(appId);
             _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
@@ -232,8 +254,23 @@ else
                 }
             }
             await Db.SaveChangesAsync();
+
+            // Also sync card drops from Steam Community badge page
+            try
+            {
+                var drops = await CommunityClient.GetCardDropsRemainingAsync(Session.SteamId64.Value);
+                var allGames = await Db.Games.ToListAsync();
+                foreach (var game in allGames)
+                    game.DropsRemaining = drops.TryGetValue(game.AppId, out var d) ? d : 0;
+                await Db.SaveChangesAsync();
+                Snackbar.Add($"Synced {owned.Count} games ({added} new) — {drops.Count} with card drops", Severity.Success);
+            }
+            catch
+            {
+                Snackbar.Add($"Synced {owned.Count} games — {added} new (card drops sync failed)", Severity.Success);
+            }
+
             _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
-            Snackbar.Add($"Synced {owned.Count} games — {added} new", Severity.Success);
         }
         catch (Exception ex) { Snackbar.Add($"Sync failed: {ex.Message}", Severity.Error); }
         finally { _syncing = false; }

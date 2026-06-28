@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SteamKit2;
+using SteamKit2.Internal;
 
 namespace SteamManager.Infrastructure.Steam;
 
@@ -9,6 +10,8 @@ public class SteamClientWrapper : IDisposable
     public SteamUser SteamUser { get; }
     public SteamFriends SteamFriends { get; }
     public CallbackManager CallbackManager { get; }
+
+    private readonly UserStatsHandler _userStatsHandler = new();
 
     public bool IsConnected => Client.IsConnected;
     public bool IsLoggedOn { get; private set; }
@@ -28,6 +31,10 @@ public class SteamClientWrapper : IDisposable
         SteamUser = Client.GetHandler<SteamUser>()!;
         SteamFriends = Client.GetHandler<SteamFriends>()!;
         CallbackManager = new CallbackManager(Client);
+        Client.AddHandler(_userStatsHandler);
+        _userStatsHandler.StoreResponseReceived += (gameId, resp) =>
+            _logger.LogInformation("StoreUserStats response: game={GameId} eresult={EResult}",
+                gameId, (EResult)resp.eresult);
 
         CallbackManager.Subscribe<SteamClient.ConnectedCallback>(_ =>
         {
@@ -94,6 +101,18 @@ public class SteamClientWrapper : IDisposable
     {
         while (!ct.IsCancellationRequested)
             CallbackManager.RunWaitCallbacks(TimeSpan.FromSeconds(1));
+    }
+
+    public async Task<CMsgClientGetUserStatsResponse> GetUserStatsAsync(uint appId, CancellationToken ct)
+    {
+        var request = new ClientMsgProtobuf<CMsgClientGetUserStats>(EMsg.ClientGetUserStats);
+        request.SourceJobID = Client.GetNextJobID();
+        request.Body.game_id = appId;
+        request.Body.steam_id_for_user = Client.SteamID;
+
+        var task = _userStatsHandler.ExpectGetResponse(request.SourceJobID);
+        Client.Send(request);
+        return await task.WaitAsync(TimeSpan.FromSeconds(15), ct);
     }
 
     public void Dispose()
