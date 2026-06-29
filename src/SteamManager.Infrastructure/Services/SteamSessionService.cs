@@ -28,6 +28,9 @@ public class SteamSessionService(
     private string? _pendingUsername;
     private PendingAuthenticator? _authenticator;
     private Task<AuthPollResult>? _pollTask;
+    private Action<bool>? _disconnectHandler;
+    private CancellationTokenSource _reconnectCts = new();
+    private volatile bool _isReconnecting;
 
     // ── IAuthenticator that pauses when a 2FA code is required ──────────────
 
@@ -68,6 +71,7 @@ public class SteamSessionService(
         try
         {
             var token = AesEncryption.Decrypt(cfg.SessionToken, EncKey);
+            _pendingUsername = cfg.Username;
             await steam.ConnectWithReconnectAsync(ct);
 
             var tcs = new TaskCompletionSource<bool>();
@@ -87,6 +91,7 @@ public class SteamSessionService(
                 SteamId64 = steam.Client.SteamID;
                 steam.SteamFriends.SetPersonaState(EPersonaState.Online);
                 SetState(LoginState.LoggedIn);
+                StartReconnectWatch();
                 return true;
             }
             SetState(LoginState.SessionExpired);
@@ -191,6 +196,7 @@ public class SteamSessionService(
         {
             await PersistSessionAsync(pollResult.RefreshToken, ct);
             steam.SteamFriends.SetPersonaState(EPersonaState.Online);
+            StartReconnectWatch();
         }
 
         SetState(state);
@@ -219,6 +225,8 @@ public class SteamSessionService(
 
     public async Task LogoutAsync()
     {
+        _reconnectCts.Cancel();
+        _reconnectCts = new CancellationTokenSource();
         steam.SteamUser.LogOff();
         SetState(LoginState.NotLoggedIn);
 
@@ -226,6 +234,49 @@ public class SteamSessionService(
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var cfg = await db.SteamConfigs.FirstOrDefaultAsync();
         if (cfg != null) { cfg.SessionToken = null; await db.SaveChangesAsync(); }
+    }
+
+    private void StartReconnectWatch()
+    {
+        _reconnectCts.Cancel();
+        _reconnectCts = new CancellationTokenSource();
+        var ct = _reconnectCts.Token;
+
+        if (_disconnectHandler != null)
+            steam.OnDisconnected -= _disconnectHandler;
+
+        _disconnectHandler = (userInitiated) =>
+        {
+            if (userInitiated || ct.IsCancellationRequested) return;
+            logger.LogWarning("Steam disconnected unexpectedly, scheduling reconnect");
+            SetState(LoginState.NotLoggedIn);
+            _ = ReconnectAsync(ct);
+        };
+
+        steam.OnDisconnected += _disconnectHandler;
+    }
+
+    private async Task ReconnectAsync(CancellationToken ct)
+    {
+        if (_isReconnecting) return;
+        _isReconnecting = true;
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            var ok = await TryRestoreSessionAsync(ct);
+            if (!ok)
+            {
+                logger.LogWarning("Auto-reconnect failed — session may have expired");
+                SetState(LoginState.SessionExpired);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Auto-reconnect error");
+            SetState(LoginState.SessionExpired);
+        }
+        finally { _isReconnecting = false; }
     }
 
     private void SetState(LoginState s) { State = s; StateChanged?.Invoke(); }

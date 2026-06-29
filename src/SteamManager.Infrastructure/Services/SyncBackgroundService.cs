@@ -22,7 +22,6 @@ public class SyncBackgroundService(
     public event Action? SyncStateChanged;
 
     private readonly SemaphoreSlim _trigger = new(0, 1);
-    private const string FallbackCron = "0 0 * * *";
 
     public Task TriggerAsync(CancellationToken ct = default)
     {
@@ -40,23 +39,35 @@ public class SyncBackgroundService(
         while (!ct.IsCancellationRequested)
         {
             var cronExpr = await GetCronAsync(ct);
-            try
-            {
-                var schedule = CronExpression.Parse(cronExpr, CronFormat.Standard);
-                NextRunUtc = schedule.GetNextOccurrence(DateTime.UtcNow, TimeZoneInfo.Utc);
-                Notify();
 
-                if (NextRunUtc.HasValue)
-                {
-                    var delay = NextRunUtc.Value - DateTime.UtcNow;
-                    if (delay > TimeSpan.Zero)
-                        await Task.WhenAny(Task.Delay(delay, ct), _trigger.WaitAsync(ct));
-                }
-            }
-            catch (CronFormatException ex)
+            if (string.IsNullOrEmpty(cronExpr))
             {
-                logger.LogWarning(ex, "Invalid cron '{Expr}', falling back to daily midnight", cronExpr);
-                await Task.WhenAny(Task.Delay(TimeSpan.FromHours(24), ct), _trigger.WaitAsync(ct));
+                NextRunUtc = null;
+                Notify();
+                await _trigger.WaitAsync(ct);
+            }
+            else
+            {
+                try
+                {
+                    var schedule = CronExpression.Parse(cronExpr, CronFormat.Standard);
+                    NextRunUtc = schedule.GetNextOccurrence(DateTime.UtcNow, TimeZoneInfo.Utc);
+                    Notify();
+
+                    if (NextRunUtc.HasValue)
+                    {
+                        var delay = NextRunUtc.Value - DateTime.UtcNow;
+                        if (delay > TimeSpan.Zero)
+                            await Task.WhenAny(Task.Delay(delay, ct), _trigger.WaitAsync(ct));
+                    }
+                }
+                catch (CronFormatException ex)
+                {
+                    logger.LogWarning(ex, "Invalid cron '{Expr}', skipping schedule", cronExpr);
+                    NextRunUtc = null;
+                    Notify();
+                    await Task.WhenAny(Task.Delay(TimeSpan.FromMinutes(5), ct), _trigger.WaitAsync(ct));
+                }
             }
 
             if (!ct.IsCancellationRequested)
@@ -64,16 +75,16 @@ public class SyncBackgroundService(
         }
     }
 
-    private async Task<string> GetCronAsync(CancellationToken ct)
+    private async Task<string?> GetCronAsync(CancellationToken ct)
     {
         try
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
-            return string.IsNullOrWhiteSpace(cfg?.SyncCron) ? FallbackCron : cfg.SyncCron;
+            return string.IsNullOrWhiteSpace(cfg?.SyncCron) ? null : cfg.SyncCron;
         }
-        catch { return FallbackCron; }
+        catch { return null; }
     }
 
     private async Task RunSyncAsync(CancellationToken ct)

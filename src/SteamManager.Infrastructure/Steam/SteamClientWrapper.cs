@@ -17,7 +17,7 @@ public class SteamClientWrapper : IDisposable
     public bool IsLoggedOn { get; private set; }
 
     public event Action? OnConnected;
-    public event Action? OnDisconnected;
+    public event Action<bool>? OnDisconnected;
     public event Action? OnLoggedOn;
     public event Action<string>? OnLoggedOff;
 
@@ -46,7 +46,7 @@ public class SteamClientWrapper : IDisposable
         {
             IsLoggedOn = false;
             _logger.LogWarning("Steam: disconnected (user-initiated={U})", cb.UserInitiated);
-            OnDisconnected?.Invoke();
+            OnDisconnected?.Invoke(cb.UserInitiated);
         });
 
         CallbackManager.Subscribe<SteamUser.LoggedOnCallback>(cb =>
@@ -74,6 +74,7 @@ public class SteamClientWrapper : IDisposable
 
     public void Connect()
     {
+        _cts.Cancel();
         _cts = new CancellationTokenSource();
         Client.Connect();
         _callbackLoop = Task.Run(() => RunCallbackLoop(_cts.Token));

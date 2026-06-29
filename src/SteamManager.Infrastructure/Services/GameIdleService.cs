@@ -10,13 +10,30 @@ using SteamManager.Infrastructure.Steam;
 
 namespace SteamManager.Infrastructure.Services;
 
-public class GameIdleService(
-    SteamClientWrapper steam,
-    IServiceScopeFactory scopeFactory,
-    ILogger<GameIdleService> logger) : IGameIdleService
+public class GameIdleService : IGameIdleService
 {
+    private readonly SteamClientWrapper _steam;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<GameIdleService> _logger;
     private readonly Dictionary<int, CancellationTokenSource> _running = [];
     public event Action<int, int>? ProgressUpdated;
+
+    public GameIdleService(SteamClientWrapper steam, IServiceScopeFactory scopeFactory, ILogger<GameIdleService> logger)
+    {
+        _steam = steam;
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+        steam.OnLoggedOn += ResumeRunningGames;
+    }
+
+    private void ResumeRunningGames()
+    {
+        foreach (var appId in _running.Keys)
+        {
+            _logger.LogInformation("Resuming game {AppId} after reconnect", appId);
+            SendGamesPlayed(appId);
+        }
+    }
 
     public bool IsRunning(int appId) => _running.ContainsKey(appId);
 
@@ -24,7 +41,7 @@ public class GameIdleService(
     {
         if (_running.ContainsKey(appId)) return;
 
-        using var scope = scopeFactory.CreateScope();
+        using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct)
@@ -49,7 +66,7 @@ public class GameIdleService(
         await cts.CancelAsync();
         _running.Remove(appId);
 
-        using var scope = scopeFactory.CreateScope();
+        using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
         if (game != null)
@@ -68,7 +85,7 @@ public class GameIdleService(
             {
                 await Task.Delay(TimeSpan.FromMinutes(1), ct);
 
-                using var scope = scopeFactory.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 var game = await db.Games.FirstAsync(g => g.AppId == appId, ct);
@@ -82,13 +99,13 @@ public class GameIdleService(
                     await db.SaveChangesAsync(ct);
                     SendGamesPlayed(0);
                     _running.Remove(appId);
-                    logger.LogInformation("Game {AppId}: target reached, idle complete", appId);
+                    _logger.LogInformation("Game {AppId}: target reached, idle complete", appId);
                     return;
                 }
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { logger.LogError(ex, "Idle loop error for {AppId}", appId); }
+        catch (Exception ex) { _logger.LogError(ex, "Idle loop error for {AppId}", appId); }
     }
 
     private void SendGamesPlayed(int appId)
@@ -96,6 +113,6 @@ public class GameIdleService(
         var msg = new ClientMsgProtobuf<CMsgClientGamesPlayed>(EMsg.ClientGamesPlayed);
         if (appId != 0)
             msg.Body.games_played.Add(new CMsgClientGamesPlayed.GamePlayed { game_id = (ulong)appId });
-        steam.Client.Send(msg);
+        _steam.Client.Send(msg);
     }
 }
