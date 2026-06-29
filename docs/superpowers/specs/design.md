@@ -1,6 +1,6 @@
 # SteamManager 设计文档
 
-**日期：** 2026-06-28（最后更新：v0.2.1）
+**日期：** 2026-06-28（最后更新：v0.2.2）
 **状态：** 已批准
 **项目：** SteamManager — 自动挂 Steam 游戏时长 + 智能成就解锁服务
 
@@ -225,7 +225,17 @@ public interface ISteamSessionService {
 
 ### 5.2 SteamClientWrapper — 断线重连
 
-指数退避重连（5s → 10s → ... → 5min），断线期间挂机任务暂停，重连后自动恢复。
+`SteamClientWrapper` 提供两个连接相关能力：
+
+- **`ConnectWithReconnectAsync`**：初始连接时的指数退避重试（5s → 10s → … → 5min），用于启动和登录流程
+- **`OnDisconnected(bool userInitiated)`**：断连事件，携带是否用户主动的标志
+
+**自动断线重连（`SteamSessionService`）：**  
+登录成功后，`SteamSessionService` 订阅 `OnDisconnected`。若 `userInitiated=false`（Steam 服务端主动断连），5 秒后自动调用 `TryRestoreSessionAsync` 恢复会话。重连成功后：
+- `SteamSessionService` 重新置 `LoggedIn` 状态并刷新 `DisplayName` / `SteamId64`
+- `GameIdleService` 监听 `OnLoggedOn` 事件，重连后立即重发 `CMsgClientGamesPlayed`，恢复所有正在挂机的游戏
+
+用户点击退出时，`LogoutAsync` 取消重连监听，不触发自动重连。
 
 ### 5.3 GameIdleService
 
@@ -328,8 +338,9 @@ public record UnlockedAchievementInfo(string GameName, string AchievementName, s
 **职责：** 定时或手动触发全局同步。
 
 **触发方式：**
-- 按 `steam_config.sync_cron` 定时触发（默认每天 0 点）
+- 按 `steam_config.sync_cron` 定时触发（**仅在配置了 Cron 表达式时生效**，无默认值）
 - Settings 页"Sync Now"按钮手动触发（通过 `SemaphoreSlim` 唤醒）
+- 若未配置 Cron，服务持续阻塞等待手动触发，不会按任何默认计划自动执行
 
 **同步流程：**
 ```
@@ -458,7 +469,7 @@ GET https://steamcommunity.com/profiles/{steamId64}/badges/?p={page}
 
 右列：
 - **Background Sync 配置：**
-  - 5-field Cron 表达式，默认 `0 0 * * *`，带实时语法校验和下次执行时间预览
+  - 5-field Cron 表达式（可选，不填则仅支持手动触发），带实时语法校验和下次执行时间预览
   - **Sync Now** 按钮：立即触发完整同步（库 + 卡牌掉落 + 所有游戏成就）
   - 同步期间显示进度条（0→100%）和当前游戏名称
 

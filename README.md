@@ -121,7 +121,7 @@ Both are accessible in the **top navigation bar** on every page. Changes apply i
 
 ### Background sync
 
-Configure a **cron schedule** in Settings (default: daily at midnight) for automatic library + achievement sync. Use **Sync Now** to trigger immediately.
+Configure a **cron schedule** in Settings for automatic library + achievement sync. Without a cron expression the sync service idles until you click **Sync Now** — no default schedule is applied.
 
 ## Configuration Reference
 
@@ -172,9 +172,14 @@ dotnet run --project src/SteamManager.Web
 docker pull chaosmin/steam-manager:latest
 ```
 
-Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.1`).
+Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.2`).
 
 ## Changelog
+
+### v0.2.2
+- Auto-reconnect on unexpected Steam disconnect: session is restored automatically from the saved token (5 s delay, exponential backoff); game idling resumes immediately after reconnect
+- Fix duplicate callback loop: `Connect()` now cancels the previous loop before starting a new one
+- Sync on demand only: background sync no longer falls back to a default daily schedule — it waits for a manual trigger unless a cron expression is explicitly configured in Settings
 
 ### v0.2.1
 - Fix achievement unlock: proper two-step `GetUserStats → StoreUserStats2` with binary KeyValue schema parsing
