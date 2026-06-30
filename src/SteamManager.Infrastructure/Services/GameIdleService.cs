@@ -51,7 +51,7 @@ public class GameIdleService : IGameIdleService
         game.LastSessionStart = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        var targetMinutes = (int)(game.TargetHours * 60);
+        var targetMinutes = Math.Max((int)(game.TargetHours * 60), game.ReferencePlayMinutes ?? 0);
 
         SendGamesPlayed(appId);
 

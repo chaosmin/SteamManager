@@ -41,7 +41,7 @@ else
         }
         @if (_game.AchievementsCachedAt.HasValue)
         {
-            <span> &nbsp;|&nbsp; Last synced: @_game.AchievementsCachedAt.Value.ToLocalTime().ToString("MM-dd HH:mm")</span>
+            <span> &nbsp;|&nbsp; Last synced: @FormatTime(_game.AchievementsCachedAt.Value)</span>
         }
     </MudText>
 
@@ -114,7 +114,7 @@ else
                     @if (context.IsUnlocked && context.UnlockedAt.HasValue)
                     {
                         <MudText Typo="Typo.caption" Color="Color.Success">
-                            @context.UnlockedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                            @FormatTime(context.UnlockedAt.Value)
                         </MudText>
                     }
                     else if (!context.IsUnlocked)
@@ -145,6 +145,7 @@ else
     int _unlocked;
     bool _loading;
     string? _loadError;
+    string _timezone = "UTC";
 
     private List<BreadcrumbItem> _breadcrumbs =
     [
@@ -154,6 +155,9 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        var cfg = await Db.SteamConfigs.AsNoTracking().FirstOrDefaultAsync();
+        _timezone = cfg?.DisplayTimezone ?? "UTC";
+
         _game = await Db.Games.AsNoTracking()
             .Include(g => g.Achievements)
             .FirstOrDefaultAsync(g => g.Id == Id);
@@ -197,5 +201,18 @@ else
         if (_game == null) return;
         _total = _game.Achievements.Count;
         _unlocked = _game.Achievements.Count(a => a.IsUnlocked);
+    }
+
+    string FormatTime(DateTime utc, string format = "yyyy-MM-dd HH:mm")
+    {
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(_timezone);
+            return TimeZoneInfo.ConvertTimeFromUtc(utc, tz).ToString(format);
+        }
+        catch
+        {
+            return utc.ToString(format);
+        }
     }
 }
