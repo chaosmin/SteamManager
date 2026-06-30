@@ -47,11 +47,15 @@ public class GameIdleService : IGameIdleService
         var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct)
             ?? throw new InvalidOperationException($"Game {appId} not found");
 
+        var wasCompleted = game.Status == GameStatus.Completed;
         game.Status = GameStatus.Running;
         game.LastSessionStart = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        var targetMinutes = Math.Max((int)(game.TargetHours * 60), game.ReferencePlayMinutes ?? 0);
+        // If manually restarted after completing, idle indefinitely (user chose to keep going)
+        var targetMinutes = wasCompleted
+            ? int.MaxValue
+            : Math.Max((int)(game.TargetHours * 60), game.ReferencePlayMinutes ?? 0);
 
         SendGamesPlayed(appId);
 
@@ -95,12 +99,17 @@ public class GameIdleService : IGameIdleService
 
                 if (game.TotalPlayMinutes >= targetMinutes)
                 {
-                    game.Status = GameStatus.Completed;
-                    await db.SaveChangesAsync(ct);
-                    SendGamesPlayed(0);
-                    _running.Remove(appId);
-                    _logger.LogInformation("Game {AppId}: target reached, idle complete", appId);
-                    return;
+                    var allUnlocked = !await db.Achievements
+                        .AnyAsync(a => a.GameId == game.Id && !a.IsUnlocked, ct);
+                    if (allUnlocked)
+                    {
+                        game.Status = GameStatus.Completed;
+                        await db.SaveChangesAsync(ct);
+                        SendGamesPlayed(0);
+                        _running.Remove(appId);
+                        _logger.LogInformation("Game {AppId}: all achievements unlocked, idle complete", appId);
+                        return;
+                    }
                 }
             }
         }
