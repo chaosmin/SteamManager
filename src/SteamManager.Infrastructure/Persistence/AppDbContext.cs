@@ -8,6 +8,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SteamConfig> SteamConfigs => Set<SteamConfig>();
     public DbSet<Game> Games => Set<Game>();
     public DbSet<Achievement> Achievements => Set<Achievement>();
+    public DbSet<SteamAuditLog> SteamAuditLogs => Set<SteamAuditLog>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -38,6 +39,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .HasForeignKey(x => x.GameId);
             e.Property(x => x.CreatedAt).ValueGeneratedOnAdd();
             e.Property(x => x.UpdatedAt).ValueGeneratedOnAddOrUpdate();
+        });
+
+        mb.Entity<SteamAuditLog>(e =>
+        {
+            e.ToTable("steam_audit_log");
+            e.Property(x => x.Source).HasMaxLength(50);
+            e.Property(x => x.Operation).HasMaxLength(100);
+            e.Property(x => x.RequestSummary).HasMaxLength(500);
+            e.Property(x => x.ResponseSummary).HasMaxLength(1000);
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.Source, x.Operation });
         });
     }
 }

@@ -34,6 +34,9 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
     opt.UseMySql(connStr, new MySqlServerVersion(new Version(8, 0, 0)),
         mysql => mysql.EnableRetryOnFailure(3)));
 
+// Audit service (singleton — uses IServiceScopeFactory internally for DB access)
+builder.Services.AddSingleton<ISteamAuditService, SteamAuditService>();
+
 // Steam + Core services
 builder.Services.AddSingleton<SteamClientWrapper>();
 builder.Services.AddSingleton<AchievementHandler>();

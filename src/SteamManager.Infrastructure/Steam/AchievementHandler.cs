@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using SteamKit2;
 using SteamKit2.Internal;
+using SteamManager.Core.Services;
 
 namespace SteamManager.Infrastructure.Steam;
 
@@ -8,11 +10,13 @@ public class AchievementHandler
 {
     private readonly SteamClientWrapper _steam;
     private readonly ILogger<AchievementHandler> _logger;
+    private readonly ISteamAuditService _audit;
 
-    public AchievementHandler(SteamClientWrapper steam, ILogger<AchievementHandler> logger)
+    public AchievementHandler(SteamClientWrapper steam, ILogger<AchievementHandler> logger, ISteamAuditService audit)
     {
         _steam = steam;
         _logger = logger;
+        _audit = audit;
     }
 
     public async Task<bool> UnlockAchievementAsync(int appId, string achievementId, CancellationToken ct = default)
@@ -36,7 +40,50 @@ public class AchievementHandler
                 return false;
             }
 
-            // Step 3: Set the bit (preserve other bits in the same stat block).
+            // Step 3: If bit already set, clear it first so Steam records a new unlock timestamp.
+            // Needed when re-unlocking an achievement that was locked with SAM or similar tools.
+            if ((currentValue & ((uint)1 << bitNum)) != 0)
+            {
+                _logger.LogInformation(
+                    "Achievement {AchId} app {AppId}: bit already set — clearing first to refresh timestamp",
+                    achievementId, appId);
+
+                var clearValue = currentValue & ~((uint)1 << bitNum);
+                var clearReq = new ClientMsgProtobuf<CMsgClientStoreUserStats2>(EMsg.ClientStoreUserStats2);
+                clearReq.Body.game_id         = (ulong)appId;
+                clearReq.Body.settor_steam_id = _steam.Client.SteamID;
+                clearReq.Body.settee_steam_id = _steam.Client.SteamID;
+                clearReq.Body.explicit_reset  = false;
+                clearReq.Body.crc_stats       = statsResponse.crc_stats;
+                clearReq.Body.stats.Add(new CMsgClientStoreUserStats2.Stats
+                    { stat_id = statId, stat_value = clearValue });
+
+                var (clearOk, clearEresult) = await _steam.StoreUserStatsAsync(clearReq, ct);
+                if (!clearOk)
+                {
+                    _logger.LogWarning("Clear failed for {AchId} app {AppId}: eresult={E}",
+                        achievementId, appId, clearEresult);
+                    return false;
+                }
+
+                // Re-fetch to get updated crc_stats after the clear.
+                await Task.Delay(1000, ct);
+                statsResponse = await _steam.GetUserStatsAsync((uint)appId, ct);
+                if (statsResponse.eresult != 1)
+                {
+                    _logger.LogWarning("Re-fetch GetUserStats failed after clear for app {AppId}: eresult={E}",
+                        appId, statsResponse.eresult);
+                    return false;
+                }
+                if (!FindAchievementBit(achievementId, statsResponse, out statId, out bitNum, out currentValue))
+                {
+                    _logger.LogWarning("Achievement {AchId} not found in schema after clear for app {AppId}",
+                        achievementId, appId);
+                    return false;
+                }
+            }
+
+            // Step 4: Set the bit (preserve other bits in the same stat block).
             var newValue = currentValue | ((uint)1 << bitNum);
 
             var storeRequest = new ClientMsgProtobuf<CMsgClientStoreUserStats2>(EMsg.ClientStoreUserStats2);
@@ -50,12 +97,23 @@ public class AchievementHandler
                 stat_id    = statId,
                 stat_value = newValue,
             });
-            _steam.Client.Send(storeRequest);
+
+            // Step 5: Send and await Steam's acknowledgement.
+            var sw = Stopwatch.StartNew();
+            var (storeOk, eresult) = await _steam.StoreUserStatsAsync(storeRequest, ct);
+            sw.Stop();
 
             _logger.LogInformation(
-                "Sent unlock for {AchId} (stat_id={StatId} bit={Bit} old={Old} new={New} crc={Crc}) app {AppId}",
-                achievementId, statId, bitNum, currentValue, newValue, statsResponse.crc_stats, appId);
-            return true;
+                "StoreUserStats for {AchId} (stat_id={StatId} bit={Bit} old={Old} new={New} crc={Crc}) app {AppId}: eresult={EResult}",
+                achievementId, statId, bitNum, currentValue, newValue, statsResponse.crc_stats, appId, eresult);
+
+            _ = _audit.LogAsync("SteamKit2", "StoreUserStats", appId,
+                $"achievement={achievementId} stat_id={statId} bit={bitNum} old={currentValue} new={newValue}",
+                storeOk,
+                $"eresult={eresult}",
+                (int)sw.ElapsedMilliseconds);
+
+            return storeOk;
         }
         catch (Exception ex)
         {

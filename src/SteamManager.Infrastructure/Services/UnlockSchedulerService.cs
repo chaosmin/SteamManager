@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamManager.Core.Services;
+using SteamManager.Infrastructure.Http;
 using SteamManager.Infrastructure.Persistence;
 using SteamManager.Infrastructure.Steam;
 
@@ -127,13 +128,48 @@ public class UnlockSchedulerService(
             .FirstOrDefaultAsync(a => a.Id == achievementId, ct);
         if (ach == null) return;
         ach.IsUnlocked = true;
-        ach.UnlockedAt = DateTime.UtcNow;
+        // Fetch the timestamp Steam actually recorded — falls back to UtcNow if unavailable.
+        ach.UnlockedAt = await FetchSteamUnlockTimeAsync(scope, ach.AppId, ach.ApiName, ct)
+                         ?? DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
         notifier.Notify(new UnlockedAchievementInfo(
             GameName: ach.Game.NameI18n ?? ach.Game.Name,
             AchievementName: ach.DisplayNameI18n ?? ach.DisplayName,
             IconUrl: ach.IconUrl));
+    }
+
+    /// <summary>
+    /// Queries Steam's GetPlayerAchievements API immediately after an unlock to retrieve
+    /// the timestamp that Steam's servers recorded. Returns null on any failure.
+    /// </summary>
+    private async Task<DateTime?> FetchSteamUnlockTimeAsync(
+        IServiceScope scope, int appId, string apiName, CancellationToken ct)
+    {
+        try
+        {
+            var db      = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = scope.ServiceProvider.GetRequiredService<ISteamSessionService>();
+            if (!session.SteamId64.HasValue) return null;
+
+            var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
+            if (cfg?.WebApiKey == null) return null;
+
+            var steamApi   = scope.ServiceProvider.GetRequiredService<SteamWebApiClient>();
+            var playerAchs = await steamApi.GetPlayerAchievementsAsync(
+                (long)session.SteamId64.Value, appId, cfg.WebApiKey, ct);
+
+            var found = playerAchs.FirstOrDefault(a =>
+                string.Equals(a.ApiName, apiName, StringComparison.OrdinalIgnoreCase));
+
+            return found?.UnlockTime.HasValue == true
+                ? DateTimeOffset.FromUnixTimeSeconds(found.UnlockTime.Value).UtcDateTime
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static int ApplyJitter(int baseMs, int jitterPercent)

@@ -1,18 +1,29 @@
+using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using SteamManager.Core.Dto;
+using SteamManager.Core.Services;
 
 namespace SteamManager.Infrastructure.Http;
 
-public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logger)
+public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logger, ISteamAuditService audit)
 {
     private static readonly TimeSpan CallDelay = TimeSpan.FromSeconds(1);
+
+    // Strip ?key=... or &key=... from URLs before logging.
+    private static readonly Regex KeyParam = new(@"[?&]key=[^&]*", RegexOptions.Compiled);
+    private static string StripKey(string url)
+    {
+        var s = KeyParam.Replace(url, m => m.Value[0] == '?' ? "?" : "");
+        return s.TrimEnd('?').TrimEnd('&');
+    }
 
     public async Task<List<SteamAchievementDto>> GetSchemaAchievementsAsync(
         int appId, string apiKey, string language = "english", CancellationToken ct = default)
     {
         var url = $"https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key={apiKey}&appid={appId}&l={language}";
-        var json = await FetchWithRetryAsync(url, ct);
+        var json = await FetchWithRetryAsync(url, ct, "GetSchemaForGame", appId);
         var achievements = JsonDocument.Parse(json).RootElement
             .GetProperty("game").GetProperty("availableGameStats").GetProperty("achievements")
             .EnumerateArray()
@@ -26,8 +37,8 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
             .ToList();
 
         await Task.Delay(CallDelay, ct);
-        var pctJson = await FetchWithRetryAsync(
-            $"https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid={appId}", ct);
+        var pctUrl = $"https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid={appId}";
+        var pctJson = await FetchWithRetryAsync(pctUrl, ct, "GetGlobalAchievementPercentages", appId);
         var pctMap = JsonDocument.Parse(pctJson).RootElement
             .GetProperty("achievementpercentages").GetProperty("achievements")
             .EnumerateArray()
@@ -50,7 +61,7 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         try
         {
             var url = $"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key={apiKey}&steamid={steamId}&appid={appId}";
-            var json = await FetchWithRetryAsync(url, ct);
+            var json = await FetchWithRetryAsync(url, ct, "GetPlayerAchievements", appId);
             return JsonDocument.Parse(json).RootElement
                 .GetProperty("playerstats").GetProperty("achievements")
                 .EnumerateArray()
@@ -74,7 +85,7 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         ulong steamId, string apiKey, string language = "english", CancellationToken ct = default)
     {
         var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={apiKey}&steamid={steamId}&include_appinfo=1&include_played_free_games=1&l={language}";
-        var json = await FetchWithRetryAsync(url, ct);
+        var json = await FetchWithRetryAsync(url, ct, "GetOwnedGames");
         var response = JsonDocument.Parse(json).RootElement.GetProperty("response");
         if (!response.TryGetProperty("games", out var games)) return [];
         return games.EnumerateArray()
@@ -93,7 +104,7 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         {
             await Task.Delay(CallDelay, ct);
             var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={apiKey}&steamid={steamId}&include_appinfo=0&include_played_free_games=1&appids_filter[0]={appId}";
-            var json = await FetchWithRetryAsync(url, ct);
+            var json = await FetchWithRetryAsync(url, ct, "GetPlayerGamePlaytime", appId);
             var resp = JsonDocument.Parse(json).RootElement.GetProperty("response");
             if (!resp.TryGetProperty("games", out var games)) return 0;
             var first = games.EnumerateArray().FirstOrDefault();
@@ -103,20 +114,41 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         catch { return 0; }
     }
 
-    private async Task<string> FetchWithRetryAsync(string url, CancellationToken ct)
+    private async Task<string> FetchWithRetryAsync(string url, CancellationToken ct,
+        string operation = "Unknown", int? appId = null)
     {
-        for (int attempt = 1; ; attempt++)
+        var sw = Stopwatch.StartNew();
+        var logUrl = StripKey(url);
+        bool success = false;
+        string responseSummary = "";
+        try
         {
-            var resp = await http.GetAsync(url, ct);
-            if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            for (int attempt = 1; ; attempt++)
             {
-                if (attempt >= 3) throw new HttpRequestException("Steam API 429 after 3 retries");
-                logger.LogWarning("Steam API 429, waiting 60s (attempt {A}/3)", attempt);
-                await Task.Delay(TimeSpan.FromSeconds(60), ct);
-                continue;
+                var resp = await http.GetAsync(url, ct);
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    if (attempt >= 3) throw new HttpRequestException("Steam API 429 after 3 retries");
+                    logger.LogWarning("Steam API 429, waiting 60s (attempt {A}/3)", attempt);
+                    await Task.Delay(TimeSpan.FromSeconds(60), ct);
+                    continue;
+                }
+                resp.EnsureSuccessStatusCode();
+                var content = await resp.Content.ReadAsStringAsync(ct);
+                success = true;
+                responseSummary = $"{content.Length}B";
+                return content;
             }
-            resp.EnsureSuccessStatusCode();
-            return await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            responseSummary = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
+            throw;
+        }
+        finally
+        {
+            sw.Stop();
+            _ = audit.LogAsync("WebApi", operation, appId, logUrl, success, responseSummary, (int)sw.ElapsedMilliseconds);
         }
     }
 }

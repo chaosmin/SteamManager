@@ -10,12 +10,25 @@ namespace SteamManager.Infrastructure.Steam;
 internal sealed class UserStatsHandler : ClientMsgHandler
 {
     private readonly Dictionary<JobID, TaskCompletionSource<CMsgClientGetUserStatsResponse>> _pending = [];
+    private readonly Dictionary<ulong, TaskCompletionSource<CMsgClientStoreUserStatsResponse>> _pendingStore = [];
+
     public event Action<ulong, CMsgClientStoreUserStatsResponse>? StoreResponseReceived;
 
     internal Task<CMsgClientGetUserStatsResponse> ExpectGetResponse(JobID jobId)
     {
         var tcs = new TaskCompletionSource<CMsgClientGetUserStatsResponse>();
         _pending[jobId] = tcs;
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Register a waiter for the StoreUserStats response for the given game.
+    /// Must be called BEFORE Client.Send() to avoid a race condition.
+    /// </summary>
+    internal Task<CMsgClientStoreUserStatsResponse> ExpectStoreResponse(ulong gameId)
+    {
+        var tcs = new TaskCompletionSource<CMsgClientStoreUserStatsResponse>();
+        _pendingStore[gameId] = tcs;
         return tcs.Task;
     }
 
@@ -34,6 +47,11 @@ internal sealed class UserStatsHandler : ClientMsgHandler
         {
             var msg = new ClientMsgProtobuf<CMsgClientStoreUserStatsResponse>(packetMsg);
             StoreResponseReceived?.Invoke(msg.Body.game_id, msg.Body);
+            if (_pendingStore.TryGetValue(msg.Body.game_id, out var tcs))
+            {
+                _pendingStore.Remove(msg.Body.game_id);
+                tcs.TrySetResult(msg.Body);
+            }
         }
     }
 }

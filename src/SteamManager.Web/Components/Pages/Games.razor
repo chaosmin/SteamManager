@@ -23,171 +23,201 @@
     </MudButton>
 </div>
 
-<!-- Filter bar -->
-<div class="d-flex align-center flex-wrap gap-4 mb-4">
-    <MudTextField @bind-Value="_search" Placeholder="Search games..." Variant="Variant.Outlined"
-                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                  Clearable="true" FullWidth="false" Style="min-width:240px" Dense="true"
-                  Immediate="true" />
-    <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
-    <MudSwitch @bind-Value="_onlyIncomplete" Color="Color.Secondary" Label="Not 100%" />
-    <MudSwitch @bind-Value="_onlyWithCardDrops" Color="Color.Warning" Label="Card drops remaining" />
-</div>
-
-@if (_games.Count == 0)
+@if (_loading)
 {
-    <MudAlert Severity="Severity.Info">
-        No games yet. Click <strong>Sync Library</strong> to import your Steam library
-        (requires Web API Key in Settings).
-    </MudAlert>
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
 }
 else
 {
-    var filtered = _games
-        .Where(g => string.IsNullOrWhiteSpace(_search) ||
-                    g.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        .Where(g => !_onlyWithAchievements || g.Achievements.Count > 0)
-        .Where(g => !_onlyIncomplete ||
-                    (g.Achievements.Count > 0 &&
-                     g.Achievements.Count(a => a.IsUnlocked) < g.Achievements.Count))
-        .Where(g => !_onlyWithCardDrops || g.DropsRemaining > 0)
-        .ToList();
+    <!-- Filter bar -->
+    <div class="d-flex align-center flex-wrap gap-4 mb-4">
+        <MudTextField @bind-Value="_search" Placeholder="Search games..." Variant="Variant.Outlined"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" FullWidth="false" Style="min-width:240px" Dense="true"
+                      Immediate="true" />
+        <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
+        <MudSwitch @bind-Value="_onlyCompleted" Color="Color.Secondary" Label="100%" />
+        <MudSwitch @bind-Value="_onlyWithCardDrops" Color="Color.Warning" Label="Card drops remaining" />
+    </div>
 
-    @if (filtered.Count == 0)
+    @if (_games.Count == 0)
     {
-        <MudAlert Severity="Severity.Info">No games match the current filters.</MudAlert>
+        <MudAlert Severity="Severity.Info">
+            No games yet. Click <strong>Sync Library</strong> to import your Steam library
+            (requires Web API Key in Settings).
+        </MudAlert>
     }
     else
     {
-        <MudGrid Spacing="3">
-            @foreach (var game in filtered)
-            {
-                var played = game.TotalPlayMinutes;
-                var achTotal = game.Achievements.Count;
-                var achDone = game.Achievements.Count(a => a.IsUnlocked);
+        var filtered = _games
+            .Where(g => string.IsNullOrWhiteSpace(_search) ||
+                        g.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(g => !_onlyWithAchievements || (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) > 0)
+            .Where(g => !_onlyCompleted ||
+                        (_achStats.GetValueOrDefault(g.Id) is {} as2 && as2.Total > 0 && as2.Unlocked == as2.Total))
+            .Where(g => !_onlyWithCardDrops || g.DropsRemaining > 0)
+            .ToList();
 
-                var refMinutes = game.ReferencePlayMinutes.HasValue && game.ReferencePlayMinutes.Value > 0
-                    ? game.ReferencePlayMinutes.Value
-                    : achTotal > 0
-                        ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
-                        : (int)(game.TargetHours * 60);
-                if (refMinutes == 0) refMinutes = (int)(game.TargetHours * 60);
-
-                double playGreenPct, playSecondPct;
-                string secondColor;
-                if (refMinutes > 0 && played <= refMinutes)
+        @if (filtered.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">No games match the current filters.</MudAlert>
+        }
+        else
+        {
+            <MudGrid Spacing="3">
+                @foreach (var game in filtered)
                 {
-                    playGreenPct = played * 100.0 / refMinutes;
-                    playSecondPct = 100.0 - playGreenPct;
-                    secondColor = "#f44336";
-                }
-                else if (refMinutes > 0 && played > refMinutes)
-                {
-                    playGreenPct = refMinutes * 100.0 / played;
-                    playSecondPct = 100.0 - playGreenPct;
-                    secondColor = "#ff9800";
-                }
-                else
-                {
-                    playGreenPct = 0; playSecondPct = 100; secondColor = "rgba(255,255,255,0.12)";
-                }
+                    var played = game.TotalPlayMinutes;
+                    var stats = _achStats.GetValueOrDefault(game.Id);
+                    var achTotal = stats?.Total ?? 0;
+                    var achDone = stats?.Unlocked ?? 0;
 
-                double achGreenPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
-                double achRedPct = 100.0 - achGreenPct;
+                    var refMinutes = game.ReferencePlayMinutes.HasValue && game.ReferencePlayMinutes.Value > 0
+                        ? game.ReferencePlayMinutes.Value
+                        : achTotal > 0
+                            ? stats!.MaxOffset
+                            : (int)(game.TargetHours * 60);
+                    if (refMinutes == 0) refMinutes = (int)(game.TargetHours * 60);
 
-                <MudItem xs="12" sm="6" md="4" lg="3">
-                    <MudCard Elevation="3" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
-                        <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
-                            <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
-                                 style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
-                                 onerror="this.src=''" />
-                            <div style="position:absolute;top:6px;right:6px">
-                                <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
-                                         Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
-                            </div>
-                        </div>
+                    double playGreenPct, playSecondPct;
+                    string secondColor;
+                    if (refMinutes > 0 && played <= refMinutes)
+                    {
+                        playGreenPct = played * 100.0 / refMinutes;
+                        playSecondPct = 100.0 - playGreenPct;
+                        secondColor = "#f44336";
+                    }
+                    else if (refMinutes > 0 && played > refMinutes)
+                    {
+                        playGreenPct = refMinutes * 100.0 / played;
+                        playSecondPct = 100.0 - playGreenPct;
+                        secondColor = "#ff9800";
+                    }
+                    else
+                    {
+                        playGreenPct = 0; playSecondPct = 100; secondColor = "rgba(255,255,255,0.12)";
+                    }
 
-                        <MudCardContent Style="flex:1;padding-bottom:4px">
-                            <MudText Typo="Typo.subtitle1" Class="mb-2"
-                                     Style="@($"font-weight:600;line-height:1.2;{(achTotal > 0 && achDone == achTotal ? "color:#4caf50" : "")}")">
-                                @(game.NameI18n ?? game.Name)
-                            </MudText>
+                    double achGreenPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
+                    double achRedPct = 100.0 - achGreenPct;
 
-                            <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
-                                @($"{played / 60.0:F1}h") / @($"{refMinutes / 60.0:F1}h")
-                                @if (achTotal > 0) { <span style="font-size:0.7rem"> avg</span> }
-                            </MudText>
-                            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12);margin-bottom:8px">
-                                @if (playGreenPct > 0)
-                                {
-                                    <div style="width:@(playGreenPct.ToString("F1"))%;background:#4caf50"></div>
-                                }
-                                @if (playSecondPct > 0)
-                                {
-                                    <div style="width:@(playSecondPct.ToString("F1"))%;background:@secondColor"></div>
-                                }
+                    <MudItem xs="12" sm="6" md="4" lg="3">
+                        <MudCard Elevation="3" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
+                            <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
+                                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
+                                     style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
+                                     onerror="this.src=''" />
+                                <div style="position:absolute;top:6px;right:6px">
+                                    <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
+                                             Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
+                                </div>
                             </div>
 
-                            @if (achTotal > 0)
-                            {
-                                <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
-                                    Achievements: @achDone / @achTotal
+                            <MudCardContent Style="flex:1;padding-bottom:4px">
+                                <MudText Typo="Typo.subtitle1" Class="mb-2"
+                                         Style="@($"font-weight:600;line-height:1.2;{(achTotal > 0 && achDone == achTotal ? "color:#4caf50" : "")}")">
+                                    @(game.NameI18n ?? game.Name)
                                 </MudText>
-                                <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12)">
-                                    @if (achGreenPct > 0)
+
+                                <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
+                                    @($"{played / 60.0:F1}h") / @($"{refMinutes / 60.0:F1}h")
+                                    @if (achTotal > 0) { <span style="font-size:0.7rem"> avg</span> }
+                                </MudText>
+                                <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12);margin-bottom:8px">
+                                    @if (playGreenPct > 0)
                                     {
-                                        <div style="width:@(achGreenPct.ToString("F1"))%;background:#4caf50"></div>
+                                        <div style="width:@(playGreenPct.ToString("F1"))%;background:#4caf50"></div>
                                     }
-                                    @if (achRedPct > 0)
+                                    @if (playSecondPct > 0)
                                     {
-                                        <div style="width:@(achRedPct.ToString("F1"))%;background:#f44336"></div>
+                                        <div style="width:@(playSecondPct.ToString("F1"))%;background:@secondColor"></div>
                                     }
                                 </div>
-                            }
-                        </MudCardContent>
 
-                        <MudCardActions Style="padding-top:0">
-                            @if (achTotal > 0)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Filled.Info" Color="Color.Info" Size="Size.Small"
-                                               OnClick="@(() => Nav.NavigateTo($"/games/{game.Id}"))" />
-                            }
-                            @if (game.Status == GameStatus.Idle || game.Status == GameStatus.Completed)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" Size="Size.Small"
-                                               OnClick="@(() => StartGame(game.AppId))" />
-                            }
-                            else if (game.Status == GameStatus.Running)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
-                                               OnClick="@(() => StopGame(game.AppId))" />
-                            }
-                        </MudCardActions>
-                    </MudCard>
-                </MudItem>
-            }
-        </MudGrid>
+                                @if (achTotal > 0)
+                                {
+                                    <MudText Typo="Typo.caption" Class="mb-1" Style="color:rgba(255,255,255,0.6)">
+                                        Achievements: @achDone / @achTotal
+                                    </MudText>
+                                    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.12)">
+                                        @if (achGreenPct > 0)
+                                        {
+                                            <div style="width:@(achGreenPct.ToString("F1"))%;background:#4caf50"></div>
+                                        }
+                                        @if (achRedPct > 0)
+                                        {
+                                            <div style="width:@(achRedPct.ToString("F1"))%;background:#f44336"></div>
+                                        }
+                                    </div>
+                                }
+                            </MudCardContent>
+
+                            <MudCardActions Style="padding-top:0">
+                                @if (achTotal > 0)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Info" Color="Color.Info" Size="Size.Small"
+                                                   OnClick="@(() => Nav.NavigateTo($"/games/{game.Id}"))" />
+                                }
+                                @if (game.Status == GameStatus.Idle || game.Status == GameStatus.Completed)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" Size="Size.Small"
+                                                   OnClick="@(() => StartGame(game.AppId))" />
+                                }
+                                else if (game.Status == GameStatus.Running)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
+                                                   OnClick="@(() => StopGame(game.AppId))" />
+                                }
+                            </MudCardActions>
+                        </MudCard>
+                    </MudItem>
+                }
+            </MudGrid>
+        }
     }
 }
 
 @code {
+    record AchievementStats(int Total, int Unlocked, int MaxOffset);
+
     List<Game> _games = [];
+    Dictionary<int, AchievementStats> _achStats = [];
+    bool _loading = true;
     bool _syncing;
     string _search = "";
     bool _onlyWithAchievements;
-    bool _onlyIncomplete;
+    bool _onlyCompleted;
     bool _onlyWithCardDrops;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
+        if (!firstRender) return;
+        await RefreshAsync();
+        StateHasChanged();
+    }
+
+    async Task RefreshAsync()
+    {
+        _games = await Db.Games.AsNoTracking().ToListAsync();
+        var raw = await Db.Achievements
+            .AsNoTracking()
+            .GroupBy(a => a.GameId)
+            .Select(g => new
+            {
+                GameId = g.Key,
+                Total = g.Count(),
+                Unlocked = g.Count(a => a.IsUnlocked),
+                MaxOffset = g.Max(a => a.UnlockOffsetMinutes),
+            })
+            .ToListAsync();
+        _achStats = raw.ToDictionary(s => s.GameId, s => new AchievementStats(s.Total, s.Unlocked, s.MaxOffset));
+        _loading = false;
     }
 
     async Task StartGame(int appId)
     {
         try
         {
-            // Stop any currently running game first
             var currentlyRunning = _games.FirstOrDefault(g => g.Status == GameStatus.Running && g.AppId != appId);
             if (currentlyRunning != null)
             {
@@ -201,7 +231,7 @@ else
                 _ = Task.Run(() => AchievementService.LoadAchievementsAsync(game.Id, appId));
             await IdleService.StartAsync(appId);
             await SchedulerService.StartAsync(appId);
-            _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
+            await RefreshAsync();
             Snackbar.Add("Game started", Severity.Success);
         }
         catch (Exception ex) { Snackbar.Add($"Failed to start: {ex.Message}", Severity.Error); }
@@ -211,7 +241,7 @@ else
     {
         await IdleService.StopAsync(appId);
         await SchedulerService.StopAsync(appId);
-        _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
+        await RefreshAsync();
         Snackbar.Add("Game stopped", Severity.Info);
     }
 
@@ -252,7 +282,6 @@ else
             }
             await Db.SaveChangesAsync();
 
-            // Also sync card drops from Steam Community badge page
             try
             {
                 var drops = await CommunityClient.GetCardDropsRemainingAsync(Session.SteamId64.Value);
@@ -267,7 +296,7 @@ else
                 Snackbar.Add($"Synced {owned.Count} games — {added} new (card drops sync failed)", Severity.Success);
             }
 
-            _games = await Db.Games.AsNoTracking().Include(g => g.Achievements).ToListAsync();
+            await RefreshAsync();
         }
         catch (Exception ex) { Snackbar.Add($"Sync failed: {ex.Message}", Severity.Error); }
         finally { _syncing = false; }

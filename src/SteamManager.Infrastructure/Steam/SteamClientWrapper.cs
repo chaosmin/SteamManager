@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using SteamKit2;
 using SteamKit2.Internal;
+using SteamManager.Core.Services;
 
 namespace SteamManager.Infrastructure.Steam;
 
@@ -22,12 +24,14 @@ public class SteamClientWrapper : IDisposable
     public event Action<string>? OnLoggedOff;
 
     private readonly ILogger<SteamClientWrapper> _logger;
+    private readonly ISteamAuditService _audit;
     private CancellationTokenSource _cts = new();
     private Task? _callbackLoop;
 
-    public SteamClientWrapper(ILogger<SteamClientWrapper> logger)
+    public SteamClientWrapper(ILogger<SteamClientWrapper> logger, ISteamAuditService audit)
     {
         _logger = logger;
+        _audit = audit;
         SteamUser = Client.GetHandler<SteamUser>()!;
         SteamFriends = Client.GetHandler<SteamFriends>()!;
         CallbackManager = new CallbackManager(Client);
@@ -106,6 +110,7 @@ public class SteamClientWrapper : IDisposable
 
     public async Task<CMsgClientGetUserStatsResponse> GetUserStatsAsync(uint appId, CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var request = new ClientMsgProtobuf<CMsgClientGetUserStats>(EMsg.ClientGetUserStats);
         request.SourceJobID = Client.GetNextJobID();
         request.Body.game_id = appId;
@@ -113,7 +118,33 @@ public class SteamClientWrapper : IDisposable
 
         var task = _userStatsHandler.ExpectGetResponse(request.SourceJobID);
         Client.Send(request);
-        return await task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+        var response = await task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+        sw.Stop();
+
+        _ = _audit.LogAsync("SteamKit2", "GetUserStats", (int)appId,
+            $"appId={appId}",
+            response.eresult == 1,
+            $"eresult={response.eresult} stats={response.stats.Count}",
+            (int)sw.ElapsedMilliseconds);
+
+        return response;
+    }
+
+    /// <summary>
+    /// Sends a StoreUserStats2 request and awaits Steam's acknowledgement response.
+    /// Returns true if Steam accepted the store (eresult == OK).
+    /// The waiter must be registered before Client.Send() — this method handles ordering internally.
+    /// </summary>
+    public async Task<(bool Ok, int EResult)> StoreUserStatsAsync(
+        ClientMsgProtobuf<CMsgClientStoreUserStats2> request, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        // Register BEFORE send to avoid missing the response callback.
+        var task = _userStatsHandler.ExpectStoreResponse(request.Body.game_id);
+        Client.Send(request);
+        var response = await task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        sw.Stop();
+        return (response.eresult == (int)EResult.OK, response.eresult);
     }
 
     public void Dispose()
