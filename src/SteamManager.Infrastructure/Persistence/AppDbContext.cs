@@ -9,6 +9,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Game> Games => Set<Game>();
     public DbSet<Achievement> Achievements => Set<Achievement>();
     public DbSet<SteamAuditLog> SteamAuditLogs => Set<SteamAuditLog>();
+    public DbSet<PlayQueueItem> PlayQueueItems => Set<PlayQueueItem>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -50,6 +51,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ResponseSummary).HasMaxLength(1000);
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => new { x.Source, x.Operation });
+        });
+
+        mb.Entity<PlayQueueItem>(e =>
+        {
+            e.ToTable("play_queue");
+            e.HasOne(x => x.Game).WithMany()
+             .HasForeignKey(x => x.GameId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.GameId).IsUnique();
+            e.HasIndex(x => x.SortOrder);
         });
     }
 }

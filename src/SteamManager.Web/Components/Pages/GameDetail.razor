@@ -3,8 +3,13 @@
 @inject AppDbContext Db
 @inject IAchievementDataService AchievementService
 @inject NavigationManager Nav
+@inject AchievementHandler AchHandler
+@inject IGameIdleService IdleService
+@inject IUnlockSchedulerService SchedulerService
+@inject ISnackbar Snackbar
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
+@using SteamManager.Infrastructure.Steam
 @using SteamManager.Core.Models
 @using Microsoft.EntityFrameworkCore
 
@@ -25,12 +30,20 @@ else
 
     <div class="d-flex align-center justify-space-between mb-1">
         <MudText Typo="Typo.h4">@(_game.NameI18n ?? _game.Name)</MudText>
-        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Refresh"
-                   OnClick="RefreshAchievementsAsync"
-                   Disabled="_loading">
-            @(_loading ? "Refreshing..." : "Refresh")
-        </MudButton>
+        <div class="d-flex gap-2">
+            <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.Replay"
+                       OnClick="ForceReplayAsync"
+                       Disabled="_forceReplaying || _loading">
+                @(_forceReplaying ? "Resetting..." : "Force Replay")
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="RefreshAchievementsAsync"
+                       Disabled="_loading || _forceReplaying">
+                @(_loading ? "Refreshing..." : "Refresh")
+            </MudButton>
+        </div>
     </div>
     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
         App ID: @_game.AppId &nbsp;|&nbsp;
@@ -95,7 +108,7 @@ else
                     }
                 </MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60.0:F2}h")</MudText>
+                    <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60}h {context.UnlockOffsetMinutes % 60}m")</MudText>
                 </MudTd>
                 <MudTd>
                     <MudText Typo="Typo.caption">@($"{context.GlobalPercent:F1}%")</MudText>
@@ -144,6 +157,7 @@ else
     int _total;
     int _unlocked;
     bool _loading;
+    bool _forceReplaying;
     string? _loadError;
     string _timezone = "UTC";
 
@@ -192,6 +206,52 @@ else
         finally
         {
             _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    async Task ForceReplayAsync()
+    {
+        if (_game == null) return;
+        _forceReplaying = true;
+        StateHasChanged();
+        try
+        {
+            // 1. Stop current idle session
+            await IdleService.StopAsync(_game.AppId);
+            await SchedulerService.StopAsync(_game.AppId);
+
+            // 2. Lock all unlocked achievements on Steam
+            var toLock = _game.Achievements.Where(a => a.IsUnlocked).Select(a => a.ApiName).ToList();
+            foreach (var apiName in toLock)
+                await AchHandler.LockAchievementAsync(_game.AppId, apiName);
+
+            // 3. Reset DB — achievements only (TotalPlayMinutes left as-is; scheduler uses session timer)
+            var game = await Db.Games.Include(g => g.Achievements).FirstAsync(g => g.Id == _game.Id);
+            game.Status = GameStatus.Idle;
+            foreach (var ach in game.Achievements)
+            {
+                ach.IsUnlocked = false;
+                ach.UnlockedAt = null;
+            }
+            await Db.SaveChangesAsync();
+
+            // 4. Start fresh idle + scheduler
+            await IdleService.StartAsync(_game.AppId);
+            await SchedulerService.StartAsync(_game.AppId);
+
+            // 5. Reload page data
+            _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).FirstOrDefaultAsync(g => g.Id == Id);
+            UpdateCounts();
+            Snackbar.Add("Force replay started — all achievements reset and idling restarted", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Force replay failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _forceReplaying = false;
             StateHasChanged();
         }
     }

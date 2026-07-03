@@ -3,6 +3,7 @@
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
 @inject IUnlockSchedulerService SchedulerService
+@inject IPlayQueueService QueueService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject ISteamSessionService Session
@@ -23,6 +24,36 @@
     </MudButton>
 </div>
 
+@if (_queue.Count > 0)
+{
+    <MudPaper Elevation="2" Class="mb-4 pa-3">
+        <MudText Typo="Typo.subtitle1" Class="mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.QueuePlayNext" Size="Size.Small" Class="mr-1" />
+            Play Queue (@_queue.Count)
+        </MudText>
+        <div class="d-flex flex-wrap gap-2">
+            @foreach (var entry in _queue)
+            {
+                <MudChip T="string"
+                         Color="@(entry.IsActive ? Color.Success : Color.Default)"
+                         Size="Size.Small"
+                         OnClose="@(async () => await RemoveFromQueue(entry.QueueItemId))"
+                         CloseIcon="@Icons.Material.Filled.Close">
+                    @if (entry.IsActive)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Class="mr-1" />
+                    }
+                    @(entry.NameI18n ?? entry.Name)
+                    @if (entry.SavedSessionMinutes > 0)
+                    {
+                        <span style="opacity:0.7;font-size:0.7rem"> (@($"{entry.SavedSessionMinutes / 60}h{entry.SavedSessionMinutes % 60}m"))</span>
+                    }
+                </MudChip>
+            }
+        </div>
+    </MudPaper>
+}
+
 @if (_loading)
 {
     <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
@@ -35,6 +66,15 @@ else
                       Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                       Clearable="true" FullWidth="false" Style="min-width:240px" Dense="true"
                       Immediate="true" />
+        <MudSelect @bind-Value="_sortOption" Dense="true" Variant="Variant.Outlined"
+                   Style="min-width:160px" Label="Sort by">
+            <MudSelectItem Value="SortOption.NameAsc">Name A→Z</MudSelectItem>
+            <MudSelectItem Value="SortOption.NameDesc">Name Z→A</MudSelectItem>
+            <MudSelectItem Value="SortOption.PlaytimeAsc">Playtime ↑</MudSelectItem>
+            <MudSelectItem Value="SortOption.PlaytimeDesc">Playtime ↓</MudSelectItem>
+            <MudSelectItem Value="SortOption.AchAsc">Achievements ↑</MudSelectItem>
+            <MudSelectItem Value="SortOption.AchDesc">Achievements ↓</MudSelectItem>
+        </MudSelect>
         <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
         <MudSwitch @bind-Value="_onlyCompleted" Color="Color.Secondary" Label="100%" />
         <MudSwitch @bind-Value="_onlyWithCardDrops" Color="Color.Warning" Label="Card drops remaining" />
@@ -53,10 +93,25 @@ else
             .Where(g => string.IsNullOrWhiteSpace(_search) ||
                         g.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
             .Where(g => !_onlyWithAchievements || (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) > 0)
-            .Where(g => !_onlyCompleted ||
-                        (_achStats.GetValueOrDefault(g.Id) is {} as2 && as2.Total > 0 && as2.Unlocked == as2.Total))
+            .Where(g =>
+            {
+                var s = _achStats.GetValueOrDefault(g.Id);
+                var allDone = s != null && s.Total > 0 && s.Unlocked == s.Total;
+                return _onlyCompleted ? allDone : !allDone;
+            })
             .Where(g => !_onlyWithCardDrops || g.DropsRemaining > 0)
             .ToList();
+
+        filtered = _sortOption switch
+        {
+            SortOption.NameAsc      => filtered.OrderBy(g => g.NameI18n ?? g.Name).ToList(),
+            SortOption.NameDesc     => filtered.OrderByDescending(g => g.NameI18n ?? g.Name).ToList(),
+            SortOption.PlaytimeAsc  => filtered.OrderBy(RemainingMinutes).ToList(),
+            SortOption.PlaytimeDesc => filtered.OrderByDescending(RemainingMinutes).ToList(),
+            SortOption.AchAsc       => filtered.OrderBy(g => (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) - (_achStats.GetValueOrDefault(g.Id)?.Unlocked ?? 0)).ToList(),
+            SortOption.AchDesc      => filtered.OrderByDescending(g => (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) - (_achStats.GetValueOrDefault(g.Id)?.Unlocked ?? 0)).ToList(),
+            _                       => filtered,
+        };
 
         @if (filtered.Count == 0)
         {
@@ -168,6 +223,14 @@ else
                                     <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
                                                    OnClick="@(() => StopGame(game.AppId))" />
                                 }
+                                @{
+                                    var inQueue = _queue.Any(q => q.GameId == game.Id);
+                                }
+                                <MudIconButton Icon="@(inQueue ? Icons.Material.Filled.PlaylistAddCheck : Icons.Material.Filled.PlaylistAdd)"
+                                               Color="@(inQueue ? Color.Secondary : Color.Default)"
+                                               Size="Size.Small"
+                                               Title="@(inQueue ? "In queue" : "Add to queue")"
+                                               OnClick="@(async () => await ToggleQueue(game.Id, inQueue))" />
                             </MudCardActions>
                         </MudCard>
                     </MudItem>
@@ -179,15 +242,29 @@ else
 
 @code {
     record AchievementStats(int Total, int Unlocked, int MaxOffset);
+    enum SortOption { NameAsc, NameDesc, PlaytimeAsc, PlaytimeDesc, AchAsc, AchDesc }
 
     List<Game> _games = [];
     Dictionary<int, AchievementStats> _achStats = [];
+    List<QueueEntry> _queue = [];
     bool _loading = true;
     bool _syncing;
     string _search = "";
     bool _onlyWithAchievements;
     bool _onlyCompleted;
     bool _onlyWithCardDrops;
+    SortOption _sortOption = SortOption.NameAsc;
+
+    int RemainingMinutes(Game g)
+    {
+        var stats = _achStats.GetValueOrDefault(g.Id);
+        var achTotal = stats?.Total ?? 0;
+        var refMin = g.ReferencePlayMinutes is > 0
+            ? g.ReferencePlayMinutes.Value
+            : achTotal > 0 ? stats!.MaxOffset : (int)(g.TargetHours * 60);
+        if (refMin == 0) refMin = (int)(g.TargetHours * 60);
+        return Math.Max(0, refMin - g.TotalPlayMinutes);
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -211,7 +288,32 @@ else
             })
             .ToListAsync();
         _achStats = raw.ToDictionary(s => s.GameId, s => new AchievementStats(s.Total, s.Unlocked, s.MaxOffset));
+        _queue = await QueueService.GetQueueAsync();
         _loading = false;
+    }
+
+    async Task ToggleQueue(int gameId, bool inQueue)
+    {
+        if (inQueue)
+        {
+            var entry = _queue.FirstOrDefault(q => q.GameId == gameId);
+            if (entry != null) await RemoveFromQueue(entry.QueueItemId);
+        }
+        else
+        {
+            await QueueService.AddToQueueAsync(gameId);
+            _queue = await QueueService.GetQueueAsync();
+            Snackbar.Add("Added to play queue", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    async Task RemoveFromQueue(int queueItemId)
+    {
+        await QueueService.RemoveFromQueueAsync(queueItemId);
+        _queue = await QueueService.GetQueueAsync();
+        await RefreshAsync();
+        StateHasChanged();
     }
 
     async Task StartGame(int appId)

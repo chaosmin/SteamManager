@@ -256,10 +256,54 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
                     b.ToTable("steam_config", (string)null);
                 });
 
+            modelBuilder.Entity("SteamManager.Core.Models.PlayQueueItem", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("AddedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("GameId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("SavedSessionMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GameId")
+                        .IsUnique();
+
+                    b.HasIndex("SortOrder");
+
+                    b.ToTable("play_queue", (string)null);
+                });
+
             modelBuilder.Entity("SteamManager.Core.Models.Achievement", b =>
                 {
                     b.HasOne("SteamManager.Core.Models.Game", "Game")
                         .WithMany("Achievements")
+                        .HasForeignKey("GameId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Game");
+                });
+
+            modelBuilder.Entity("SteamManager.Core.Models.PlayQueueItem", b =>
+                {
+                    b.HasOne("SteamManager.Core.Models.Game", "Game")
+                        .WithMany()
                         .HasForeignKey("GameId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

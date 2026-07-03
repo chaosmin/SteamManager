@@ -97,6 +97,23 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
             .ToList();
     }
 
+    /// <summary>Returns the AppId the player is currently playing, or null if not in a game / profile private.</summary>
+    public async Task<int?> GetCurrentGameIdAsync(ulong steamId, string apiKey, CancellationToken ct = default)
+    {
+        try
+        {
+            var url = $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={apiKey}&steamids={steamId}";
+            var json = await FetchWithRetryAsync(url, ct, "GetPlayerSummaries");
+            var player = JsonDocument.Parse(json).RootElement
+                .GetProperty("response").GetProperty("players")
+                .EnumerateArray().FirstOrDefault();
+            if (player.ValueKind == JsonValueKind.Undefined) return null;
+            return player.TryGetProperty("gameid", out var gid) && int.TryParse(gid.GetString(), out var id)
+                ? id : null;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Returns playtime_forever (minutes) for a specific player+game. Returns 0 on failure or private profile.</summary>
     public async Task<int> GetPlayerGamePlaytimeAsync(long steamId, int appId, string apiKey, CancellationToken ct = default)
     {

@@ -122,6 +122,49 @@ public class AchievementHandler
         }
     }
 
+    public async Task<bool> LockAchievementAsync(int appId, string achievementId, CancellationToken ct = default)
+    {
+        try
+        {
+            var statsResponse = await _steam.GetUserStatsAsync((uint)appId, ct);
+            if (statsResponse.eresult != 1)
+            {
+                _logger.LogWarning("GetUserStats failed for app {AppId}: eresult={E}", appId, statsResponse.eresult);
+                return false;
+            }
+
+            if (!FindAchievementBit(achievementId, statsResponse, out var statId, out var bitNum, out var currentValue))
+                return false;
+
+            // Already locked — nothing to do
+            if ((currentValue & ((uint)1 << bitNum)) == 0) return true;
+
+            var newValue = currentValue & ~((uint)1 << bitNum);
+            var request = new ClientMsgProtobuf<CMsgClientStoreUserStats2>(EMsg.ClientStoreUserStats2);
+            request.Body.game_id         = (ulong)appId;
+            request.Body.settor_steam_id = _steam.Client.SteamID;
+            request.Body.settee_steam_id = _steam.Client.SteamID;
+            request.Body.explicit_reset  = false;
+            request.Body.crc_stats       = statsResponse.crc_stats;
+            request.Body.stats.Add(new CMsgClientStoreUserStats2.Stats { stat_id = statId, stat_value = newValue });
+
+            var sw = Stopwatch.StartNew();
+            var (ok, eresult) = await _steam.StoreUserStatsAsync(request, ct);
+            sw.Stop();
+
+            _ = _audit.LogAsync("SteamKit2", "LockAchievement", appId,
+                $"achievement={achievementId} stat_id={statId} bit={bitNum} old={currentValue} new={newValue}",
+                ok, $"eresult={eresult}", (int)sw.ElapsedMilliseconds);
+
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to lock achievement {AchId} in app {AppId}", achievementId, appId);
+            return false;
+        }
+    }
+
     /// <summary>
     /// Parses the binary KeyValue schema returned by GetUserStats to find the parent stat block
     /// (type=4 / ACHIEVEMENTS) and bit position for the given achievement API name.

@@ -17,11 +17,17 @@ public class UnlockSchedulerService(
     ILogger<UnlockSchedulerService> logger) : IUnlockSchedulerService
 {
     private readonly Dictionary<int, CancellationTokenSource> _running = [];
-    private int JitterPercent => config.GetValue("AchievementData:IntervalJitterPercent", 10);
+    private readonly Dictionary<int, DateTime> _sessionStart = [];
 
     public bool IsRunning(int appId) => _running.ContainsKey(appId);
 
-    public async Task StartAsync(int appId, CancellationToken ct = default)
+    public TimeSpan? GetElapsedSessionTime(int appId) =>
+        _sessionStart.TryGetValue(appId, out var start) ? DateTime.UtcNow - start : null;
+
+    public Task StartAsync(int appId, CancellationToken ct = default) =>
+        StartAsync(appId, resumeFromMinutes: 0, ct);
+
+    public async Task StartAsync(int appId, int resumeFromMinutes, CancellationToken ct = default)
     {
         if (_running.ContainsKey(appId)) return;
 
@@ -38,6 +44,8 @@ public class UnlockSchedulerService(
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running[appId] = cts;
+        // Shift session start backwards so already-elapsed minutes are accounted for
+        _sessionStart[appId] = DateTime.UtcNow.AddMinutes(-resumeFromMinutes);
         _ = RunSchedulerLoopAsync(appId, cts.Token);
     }
 
@@ -46,77 +54,70 @@ public class UnlockSchedulerService(
         if (!_running.TryGetValue(appId, out var cts)) return;
         await cts.CancelAsync();
         _running.Remove(appId);
+        _sessionStart.Remove(appId);
     }
 
     private async Task RunSchedulerLoopAsync(int appId, CancellationToken ct)
     {
         try
         {
-            // Phase 1: catch-up — unlock all overdue achievements with 1-100s random gaps
-            await CatchUpOverdueAsync(appId, ct);
+            var sessionStart = _sessionStart[appId];
 
-            // Phase 2: poll every ~30s for newly-due achievements
-            while (!ct.IsCancellationRequested)
+            // Load all pending achievements sorted by offset.
+            // Timing is based on elapsed session time (sessionStart + offset),
+            // independent of Steam's accumulated TotalPlayMinutes.
+            List<(int Id, string ApiName, int OffsetMinutes)> pending;
+            using (var scope = scopeFactory.CreateScope())
             {
-                await Task.Delay(ApplyJitter(30_000, JitterPercent), ct);
-                await UnlockNextDueAsync(appId, ct);
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
+                if (game == null) return;
+
+                var rows = await db.Achievements
+                    .Where(a => a.GameId == game.Id && !a.IsUnlocked)
+                    .OrderBy(a => a.UnlockOffsetMinutes)
+                    .Select(a => new { a.Id, a.ApiName, a.UnlockOffsetMinutes })
+                    .ToListAsync(ct);
+                pending = rows.Select(r => (r.Id, r.ApiName, r.UnlockOffsetMinutes)).ToList();
+            }
+
+            if (pending.Count == 0) return;
+            logger.LogInformation("Scheduler: {Count} achievements pending for app {AppId}", pending.Count, appId);
+
+            foreach (var (id, apiName, offsetMinutes) in pending)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                // Wait until session elapsed time reaches this achievement's offset
+                var targetTime = sessionStart.AddMinutes(offsetMinutes);
+                var waitMs = (int)(targetTime - DateTime.UtcNow).TotalMilliseconds;
+                if (waitMs > 0)
+                {
+                    logger.LogInformation("Scheduler: waiting {Wait}s for {AchId} (offset {Off}min) app {AppId}",
+                        waitMs / 1000, apiName, offsetMinutes, appId);
+                    await Task.Delay(waitMs, ct);
+                }
+
+                // 1-100s random jitter before unlock
+                await Task.Delay(Random.Shared.Next(1_000, 101_000), ct);
+
+                // Skip if already unlocked by a concurrent sync
+                using (var scope = scopeFactory.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var alreadyDone = await db.Achievements
+                        .Where(a => a.Id == id)
+                        .Select(a => a.IsUnlocked)
+                        .FirstOrDefaultAsync(ct);
+                    if (alreadyDone) continue;
+                }
+
+                var ok = await handler.UnlockAchievementAsync(appId, apiName, ct);
+                if (ok) await SaveUnlockedAsync(id, ct);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { logger.LogError(ex, "Scheduler loop error for {AppId}", appId); }
-    }
-
-    private async Task CatchUpOverdueAsync(int appId, CancellationToken ct)
-    {
-        List<(int Id, string ApiName)> overdue;
-        using (var scope = scopeFactory.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
-            if (game == null) return;
-
-            var rows = await db.Achievements
-                .Where(a => a.GameId == game.Id && !a.IsUnlocked
-                            && a.UnlockOffsetMinutes <= game.TotalPlayMinutes)
-                .OrderBy(a => a.UnlockOffsetMinutes)
-                .Select(a => new { a.Id, a.ApiName })
-                .ToListAsync(ct);
-            overdue = rows.Select(r => (r.Id, r.ApiName)).ToList();
-        }
-
-        if (overdue.Count == 0) return;
-        logger.LogInformation("Catch-up: {Count} overdue achievements for app {AppId}", overdue.Count, appId);
-
-        foreach (var (id, apiName) in overdue)
-        {
-            if (ct.IsCancellationRequested) break;
-            await Task.Delay(Random.Shared.Next(1_000, 101_000), ct); // 1-100s gap
-            var ok = await handler.UnlockAchievementAsync(appId, apiName, ct);
-            if (ok) await SaveUnlockedAsync(id, ct);
-        }
-    }
-
-    private async Task UnlockNextDueAsync(int appId, CancellationToken ct)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct);
-        if (game == null) return;
-
-        var next = await db.Achievements
-            .Where(a => a.GameId == game.Id && !a.IsUnlocked
-                        && a.UnlockOffsetMinutes <= game.TotalPlayMinutes)
-            .OrderBy(a => a.UnlockOffsetMinutes)
-            .FirstOrDefaultAsync(ct);
-        if (next == null) return;
-
-        logger.LogInformation("Unlocking {AchId} for app {AppId} at {Min}min",
-            next.ApiName, appId, game.TotalPlayMinutes);
-
-        await Task.Delay(Random.Shared.Next(1_000, 101_000), ct); // ±1-100s pre-unlock jitter
-        var ok = await handler.UnlockAchievementAsync(appId, next.ApiName, ct);
-        if (ok) await SaveUnlockedAsync(next.Id, ct);
     }
 
     private async Task SaveUnlockedAsync(int achievementId, CancellationToken ct)
@@ -172,9 +173,4 @@ public class UnlockSchedulerService(
         }
     }
 
-    public static int ApplyJitter(int baseMs, int jitterPercent)
-    {
-        var jitter = (int)(baseMs * jitterPercent / 100.0 * (Random.Shared.NextDouble() * 2 - 1));
-        return Math.Max(1000, baseMs + jitter);
-    }
 }

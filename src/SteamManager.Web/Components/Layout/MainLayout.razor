@@ -22,15 +22,17 @@
         <MudSpacer />
 
         <MudSelect Value="_language" ValueChanged="@ChangeLanguage" T="string"
+                   ToStringFunc="@(l => l == "english" ? "EN" : "中文")"
                    Variant="Variant.Text" Dense="true" DisableUnderLine="true"
-                   Style="min-width:110px;color:rgba(255,255,255,0.87)" Class="mr-3 mt-1">
+                   Style="width:58px;font-size:0.75rem;color:rgba(255,255,255,0.87)" Class="mr-2 mt-1">
             <MudSelectItem Value="@("english")">English</MudSelectItem>
             <MudSelectItem Value="@("schinese")">简体中文</MudSelectItem>
         </MudSelect>
 
         <MudSelect Value="_timezone" ValueChanged="@ChangeTimezone" T="string"
+                   ToStringFunc="@(id => _timezones.FirstOrDefault(t => t.Id == id).Label.Split(' ')[0])"
                    Variant="Variant.Text" Dense="true" DisableUnderLine="true"
-                   Style="min-width:160px;color:rgba(255,255,255,0.87)" Class="mt-1">
+                   Style="width:78px;font-size:0.75rem;color:rgba(255,255,255,0.87)" Class="mt-1">
             @foreach (var (id, label) in _timezones)
             {
                 <MudSelectItem Value="@id">@label</MudSelectItem>
@@ -56,26 +58,27 @@
 
     private static readonly (string Id, string Label)[] _timezones =
     [
-        ("UTC",                 "UTC+0"),
-        ("Asia/Shanghai",       "UTC+8  上海"),
-        ("Asia/Hong_Kong",      "UTC+8  香港"),
-        ("Asia/Singapore",      "UTC+8  新加坡"),
-        ("Asia/Tokyo",          "UTC+9  东京"),
-        ("Asia/Seoul",          "UTC+9  首尔"),
+        ("UTC",                 "UTC+0   UTC"),
+        ("Asia/Shanghai",       "UTC+8   上海"),
+        ("Asia/Hong_Kong",      "UTC+8   香港"),
+        ("Asia/Singapore",      "UTC+8   新加坡"),
+        ("Asia/Tokyo",          "UTC+9   东京"),
+        ("Asia/Seoul",          "UTC+9   首尔"),
         ("Asia/Kolkata",        "UTC+5:30 印度"),
-        ("Asia/Dubai",          "UTC+4  迪拜"),
-        ("Europe/London",       "UTC+0  伦敦"),
-        ("Europe/Paris",        "UTC+1  巴黎"),
-        ("Europe/Berlin",       "UTC+1  柏林"),
-        ("Europe/Moscow",       "UTC+3  莫斯科"),
-        ("America/New_York",    "UTC-5  纽约"),
-        ("America/Chicago",     "UTC-6  芝加哥"),
-        ("America/Denver",      "UTC-7  丹佛"),
-        ("America/Los_Angeles", "UTC-8  洛杉矶"),
-        ("America/Sao_Paulo",   "UTC-3  圣保罗"),
-        ("Australia/Sydney",    "UTC+10 悉尼"),
-        ("Pacific/Auckland",    "UTC+12 奥克兰"),
+        ("Asia/Dubai",          "UTC+4   迪拜"),
+        ("Europe/London",       "UTC+0   伦敦"),
+        ("Europe/Paris",        "UTC+1   巴黎"),
+        ("Europe/Berlin",       "UTC+1   柏林"),
+        ("Europe/Moscow",       "UTC+3   莫斯科"),
+        ("America/New_York",    "UTC-5   纽约"),
+        ("America/Chicago",     "UTC-6   芝加哥"),
+        ("America/Denver",      "UTC-7   丹佛"),
+        ("America/Los_Angeles", "UTC-8   洛杉矶"),
+        ("America/Sao_Paulo",   "UTC-3   圣保罗"),
+        ("Australia/Sydney",    "UTC+10  悉尼"),
+        ("Pacific/Auckland",    "UTC+12  奥克兰"),
     ];
+
 
     protected override async Task OnInitializedAsync()
     {

@@ -50,6 +50,10 @@ builder.Services.AddSingleton<SyncBackgroundService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncBackgroundService>());
 builder.Services.AddSingleton<ISyncService>(sp => sp.GetRequiredService<SyncBackgroundService>());
 
+builder.Services.AddSingleton<PlayQueueService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PlayQueueService>());
+builder.Services.AddSingleton<IPlayQueueService>(sp => sp.GetRequiredService<PlayQueueService>());
+
 // HTTP clients
 builder.Services.AddHttpClient<SteamWebApiClient>();
 builder.Services.AddHttpClient<SteamHuntersClient>();
@@ -71,6 +75,38 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("SET time_zone = '+00:00'");
+
+    // Ensure tables exist — guard against migration history/table state mismatch
+    await db.Database.ExecuteSqlRawAsync(@"
+        CREATE TABLE IF NOT EXISTS steam_audit_log (
+            Id BIGINT NOT NULL AUTO_INCREMENT,
+            Source VARCHAR(50) NOT NULL,
+            Operation VARCHAR(100) NOT NULL,
+            AppId INT NULL,
+            RequestSummary VARCHAR(500) NULL,
+            Success TINYINT(1) NOT NULL,
+            ResponseSummary VARCHAR(1000) NULL,
+            DurationMs INT NOT NULL,
+            CreatedAt DATETIME(6) NOT NULL,
+            PRIMARY KEY (Id),
+            KEY IX_steam_audit_log_CreatedAt (CreatedAt),
+            KEY IX_steam_audit_log_Source_Operation (Source, Operation)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    await db.Database.ExecuteSqlRawAsync(@"
+        CREATE TABLE IF NOT EXISTS play_queue (
+            Id INT NOT NULL AUTO_INCREMENT,
+            GameId INT NOT NULL,
+            SortOrder INT NOT NULL DEFAULT 0,
+            SavedSessionMinutes INT NOT NULL DEFAULT 0,
+            IsActive TINYINT(1) NOT NULL DEFAULT 0,
+            AddedAt DATETIME(6) NOT NULL,
+            PRIMARY KEY (Id),
+            UNIQUE KEY IX_play_queue_GameId (GameId),
+            KEY IX_play_queue_SortOrder (SortOrder),
+            CONSTRAINT FK_play_queue_game_GameId
+                FOREIGN KEY (GameId) REFERENCES game (Id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
 
 // Startup recovery — run in background so Kestrel starts immediately
