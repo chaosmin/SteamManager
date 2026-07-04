@@ -21,6 +21,7 @@ When asked to publish a version:
 4. **Commit** — stage all modified/new files and commit with message `docs: vX.Y.Z — <one-line summary>`
 5. **Tag** — `git tag vX.Y.Z`
 6. **Push** — `git push && git push --tags`
+7. **Stop local server** — `pkill -f "SteamManager.Web" 2>/dev/null`
 
 Version bump rules:
 - **Minor version** (patch): last digit +1 → `v0.3.0` → `v0.3.1`
