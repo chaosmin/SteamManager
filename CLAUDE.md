@@ -6,10 +6,13 @@ After completing any code change, **restart the local dev server** automatically
 
 ```bash
 pkill -f "SteamManager.Web" 2>/dev/null; sleep 1
+export $(grep -v '^#' .env | xargs)
 /Users/hugomin/.dotnet/dotnet run --project src/SteamManager.Web/SteamManager.Web.csproj
 ```
 
 Run in background and wait ~8s, then confirm it prints `Now listening on: http://0.0.0.0:5066`.
+
+> Secrets (`DB_PASSWORD`, `SESSION_ENCRYPTION_KEY`, etc.) live in `.env` (gitignored). `launchSettings.json` only sets `ASPNETCORE_ENVIRONMENT`; all other env vars come from the shell after the export above.
 
 ## Release Process
 
