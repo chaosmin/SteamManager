@@ -30,9 +30,3 @@ Version bump rules:
 - **Minor version** (patch): last digit +1 → `v0.3.0` → `v0.3.1`
 - **Major version** (feature): middle digit +1, last resets → `v0.3.1` → `v0.4.0`
 
-## Local Dev Environment
-
-- **dotnet**: `/Users/hugomin/.dotnet/dotnet`
-- **URL**: http://localhost:5066
-- **DB**: MySQL on NAS at `192.168.71.39:3306`, db=`steam_manager`, user=`steam_mgr`
-- **Env vars**: set in `src/SteamManager.Web/Properties/launchSettings.json` (http profile)
