@@ -136,12 +136,10 @@ public class PlayQueueService(
             if (currentGameId.HasValue && currentGameId.Value != appId)
             {
                 logger.LogInformation("PlayQueue: player in game {Current}, pausing idle for {AppId}", currentGameId, appId);
-                var elapsed = schedulerService.GetElapsedSessionTime(appId);
                 await idleService.StopAsync(appId);
-                await schedulerService.StopAsync(appId);
+                await schedulerService.StopAsync(appId); // persists delta to game.SavedIdleDeltaMinutes
 
                 activeItem.IsActive = false;
-                activeItem.SavedSessionMinutes += (int)(elapsed?.TotalMinutes ?? 0);
                 await ResetGameStatusAsync(db, activeItem.GameId);
                 await db.SaveChangesAsync(ct);
                 _notInGameStreak = 0;
@@ -179,15 +177,14 @@ public class PlayQueueService(
         if (next == null) return;
 
         var appId = next.Game.AppId;
-        var resumeFrom = next.SavedSessionMinutes;
 
-        logger.LogInformation("PlayQueue: starting game {AppId} (resume from {Min}min)", appId, resumeFrom);
+        logger.LogInformation("PlayQueue: starting game {AppId}", appId);
 
         next.IsActive = true;
         await db.SaveChangesAsync(ct);
 
         await idleService.StartAsync(appId, ct);
-        await schedulerService.StartAsync(appId, resumeFrom, ct);
+        await schedulerService.StartAsync(appId, ct); // reads SavedIdleDeltaMinutes from DB
 
         var game = await db.Games.FirstOrDefaultAsync(g => g.Id == next.GameId, ct);
         if (game != null)

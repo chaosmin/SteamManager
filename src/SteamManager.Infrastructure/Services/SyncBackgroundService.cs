@@ -181,7 +181,6 @@ public class SyncBackgroundService(
                     AppId = appId,
                     Name = name,
                     NameI18n = language != "english" ? name : null,
-                    TargetHours = 10,
                     TotalPlayMinutes = playtimeMinutes,
                 });
                 added++;

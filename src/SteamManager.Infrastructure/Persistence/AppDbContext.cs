@@ -26,7 +26,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.ToTable("game");
             e.HasIndex(x => x.AppId).IsUnique();
             e.Property(x => x.Status).HasConversion<string>();
-            e.Property(x => x.TargetHours).HasPrecision(8, 2);
             e.Property(x => x.CreatedAt).ValueGeneratedOnAdd();
             e.Property(x => x.UpdatedAt).ValueGeneratedOnAddOrUpdate();
         });
@@ -62,5 +61,21 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => x.GameId).IsUnique();
             e.HasIndex(x => x.SortOrder);
         });
+
+        // Apply snake_case column naming to all entities
+        foreach (var entity in mb.Model.GetEntityTypes())
+            foreach (var property in entity.GetProperties())
+                property.SetColumnName(ToSnakeCase(property.Name));
+    }
+
+    private static string ToSnakeCase(string name)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < name.Length; i++)
+        {
+            if (char.IsUpper(name[i]) && i > 0) sb.Append('_');
+            sb.Append(char.ToLower(name[i]));
+        }
+        return sb.ToString();
     }
 }

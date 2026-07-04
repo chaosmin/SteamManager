@@ -8,7 +8,6 @@ public class Game
     public int AppId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? NameI18n { get; set; }
-    public decimal TargetHours { get; set; }
     public GameStatus Status { get; set; } = GameStatus.Idle;
 
     // Play time tracking (merged from GameProgress)
@@ -17,6 +16,10 @@ public class Game
 
     // Reference play minutes: median total playtime of 100%-completion reference players
     public int? ReferencePlayMinutes { get; set; }
+
+    // Persisted idle-session delta: minutes elapsed beyond lastUnlockedOffset at last stop.
+    // Restored by UnlockSchedulerService on restart to resume the built-in timer.
+    public int SavedIdleDeltaMinutes { get; set; }
 
     // Achievement cache freshness
     public DateTime? AchievementsCachedAt { get; set; }  // UTC

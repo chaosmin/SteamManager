@@ -55,7 +55,7 @@ public class GameIdleService : IGameIdleService
         // If manually restarted after completing, idle indefinitely (user chose to keep going)
         var targetMinutes = wasCompleted
             ? int.MaxValue
-            : Math.Max((int)(game.TargetHours * 60), game.ReferencePlayMinutes ?? 0);
+            : Math.Max(600, game.ReferencePlayMinutes ?? 0);
 
         SendGamesPlayed(appId);
 

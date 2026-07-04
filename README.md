@@ -176,6 +176,25 @@ Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-man
 
 ## Changelog
 
+### v0.3.1
+- Fix achievement scheduler: delta-based timer independent of `TotalPlayMinutes`; per-game progress persisted to DB (`SavedIdleDeltaMinutes`) across restarts
+- Fix Dashboard "Next Achievement" skipping achievements when playtime synced past offset; countdown now uses live scheduler timer
+- Add upcoming achievements icon row in Dashboard with per-icon hover countdown
+- Add server-validated achievement badge on game cards (detected from audit log failures)
+- DB columns renamed to snake_case across all tables; `created_at`/`updated_at` moved to end; `TargetHours` removed
+- 100% filter switch color fixed (visible on dark background)
+
+### v0.3.0
+- Play Queue: background auto-idling through a prioritized game queue
+- Scheduler resume: paused queue entries resume unlock schedule from saved offset
+- Startup table guard: idempotent table creation on startup to handle migration state mismatch
+
+### v0.2.4
+- Audit log: all Steam API and SteamKit2 calls logged to `steam_audit_log` table
+- Achievement unlock timestamp synced from Steam server
+- Games page: lazy achievement load, improved filter/sort performance
+- 100% filter toggle added to Games page
+
 ### v0.2.2
 - Auto-reconnect on unexpected Steam disconnect: session is restored automatically from the saved token (5 s delay, exponential backoff); game idling resumes immediately after reconnect
 - Fix duplicate callback loop: `Connect()` now cancels the previous loop before starting a new one

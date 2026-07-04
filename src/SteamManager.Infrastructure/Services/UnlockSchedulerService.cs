@@ -18,16 +18,40 @@ public class UnlockSchedulerService(
 {
     private readonly Dictionary<int, CancellationTokenSource> _running = [];
     private readonly Dictionary<int, DateTime> _sessionStart = [];
+    // Tracks the offset of the last unlocked achievement for this session.
+    // Updated in-memory each time an achievement is unlocked so GetElapsedSessionTime
+    // always returns the delta relative to the most recent unlock.
+    private readonly Dictionary<int, int> _lastUnlockedOffset = [];
 
     public bool IsRunning(int appId) => _running.ContainsKey(appId);
 
-    public TimeSpan? GetElapsedSessionTime(int appId) =>
-        _sessionStart.TryGetValue(appId, out var start) ? DateTime.UtcNow - start : null;
+    public TimeSpan? GetTimeUntilNext(int appId, int targetOffsetMinutes)
+    {
+        if (!_sessionStart.TryGetValue(appId, out var start)) return null;
+        var remaining = start.AddMinutes(targetOffsetMinutes) - DateTime.UtcNow;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
 
-    public Task StartAsync(int appId, CancellationToken ct = default) =>
-        StartAsync(appId, resumeFromMinutes: 0, ct);
+    /// <summary>
+    /// Returns how many idle minutes have elapsed since the last unlocked achievement
+    /// (pure delta — excludes the lastUnlockedOffset base). This is what gets persisted
+    /// to game.SavedIdleDeltaMinutes on stop and restored on the next start.
+    /// </summary>
+    public TimeSpan? GetElapsedSessionTime(int appId)
+    {
+        if (!_sessionStart.TryGetValue(appId, out var start)) return null;
+        var total = DateTime.UtcNow - start;
+        var offset = _lastUnlockedOffset.TryGetValue(appId, out var o) ? o : 0;
+        return total - TimeSpan.FromMinutes(offset);
+    }
 
-    public async Task StartAsync(int appId, int resumeFromMinutes, CancellationToken ct = default)
+    /// <summary>
+    /// Starts the idle scheduler for appId.
+    /// Reads game.SavedIdleDeltaMinutes from DB to restore the timer after a restart.
+    /// Timer base = lastUnlockedOffset (from DB) + savedDelta, so the first pending
+    /// achievement unlocks after (its offset − lastUnlockedOffset − savedDelta) minutes.
+    /// </summary>
+    public async Task StartAsync(int appId, CancellationToken ct = default)
     {
         if (_running.ContainsKey(appId)) return;
 
@@ -42,19 +66,61 @@ public class UnlockSchedulerService(
         if (!hasAchievements)
             await dataService.LoadAchievementsAsync(game.Id, appId, ct);
 
+        // Last unlocked achievement's offset = the built-in timer's base.
+        var lastUnlockedOffset = await db.Achievements
+            .Where(a => a.GameId == game.Id && a.IsUnlocked)
+            .MaxAsync(a => (int?)a.UnlockOffsetMinutes, ct) ?? 0;
+
+        // savedDelta = idle minutes already accumulated beyond lastUnlockedOffset.
+        var savedDelta = game.SavedIdleDeltaMinutes;
+
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running[appId] = cts;
-        // Shift session start backwards so already-elapsed minutes are accounted for
-        _sessionStart[appId] = DateTime.UtcNow.AddMinutes(-resumeFromMinutes);
+        _lastUnlockedOffset[appId] = lastUnlockedOffset;
+        // sessionStart is set so that (NOW − sessionStart) = lastUnlockedOffset + savedDelta.
+        _sessionStart[appId] = DateTime.UtcNow.AddMinutes(-(lastUnlockedOffset + savedDelta));
+
+        logger.LogInformation(
+            "Scheduler: starting app {AppId} — lastUnlockedOffset={Base}min savedDelta={Delta}min",
+            appId, lastUnlockedOffset, savedDelta);
+
         _ = RunSchedulerLoopAsync(appId, cts.Token);
     }
 
+    /// <summary>
+    /// Stops the scheduler and persists the current idle delta to game.SavedIdleDeltaMinutes
+    /// so it can be restored on the next StartAsync call.
+    /// </summary>
     public async Task StopAsync(int appId)
     {
         if (!_running.TryGetValue(appId, out var cts)) return;
+
+        // Capture elapsed before cancelling so the value is accurate.
+        var deltaMinutes = (int)(GetElapsedSessionTime(appId)?.TotalMinutes ?? 0);
+
         await cts.CancelAsync();
         _running.Remove(appId);
         _sessionStart.Remove(appId);
+        _lastUnlockedOffset.Remove(appId);
+
+        // Persist timer so a restart can resume from the same point.
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
+            if (game != null)
+            {
+                game.SavedIdleDeltaMinutes = deltaMinutes;
+                await db.SaveChangesAsync();
+                logger.LogInformation(
+                    "Scheduler: stopped app {AppId} — persisted delta={Delta}min", appId, deltaMinutes);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Scheduler: failed to persist idle delta for app {AppId}", appId);
+        }
     }
 
     private async Task RunSchedulerLoopAsync(int appId, CancellationToken ct)
@@ -63,9 +129,6 @@ public class UnlockSchedulerService(
         {
             var sessionStart = _sessionStart[appId];
 
-            // Load all pending achievements sorted by offset.
-            // Timing is based on elapsed session time (sessionStart + offset),
-            // independent of Steam's accumulated TotalPlayMinutes.
             List<(int Id, string ApiName, int OffsetMinutes)> pending;
             using (var scope = scopeFactory.CreateScope())
             {
@@ -88,17 +151,20 @@ public class UnlockSchedulerService(
             {
                 if (ct.IsCancellationRequested) break;
 
-                // Wait until session elapsed time reaches this achievement's offset
+                // Achievement unlocks when sessionStart + offset is reached,
+                // i.e. after (offset − lastUnlockedOffset − savedDelta) idle minutes.
                 var targetTime = sessionStart.AddMinutes(offsetMinutes);
                 var waitMs = (int)(targetTime - DateTime.UtcNow).TotalMilliseconds;
                 if (waitMs > 0)
                 {
-                    logger.LogInformation("Scheduler: waiting {Wait}s for {AchId} (offset {Off}min) app {AppId}",
-                        waitMs / 1000, apiName, offsetMinutes, appId);
+                    var deltaLog = _lastUnlockedOffset.TryGetValue(appId, out var lo) ? offsetMinutes - lo : offsetMinutes;
+                    logger.LogInformation(
+                        "Scheduler: waiting {Wait}s for {AchId} (delta {Delta}min) app {AppId}",
+                        waitMs / 1000, apiName, deltaLog, appId);
                     await Task.Delay(waitMs, ct);
                 }
 
-                // 1-100s random jitter before unlock
+                // 1–100 s random jitter before unlock
                 await Task.Delay(Random.Shared.Next(1_000, 101_000), ct);
 
                 // Skip if already unlocked by a concurrent sync
@@ -113,7 +179,13 @@ public class UnlockSchedulerService(
                 }
 
                 var ok = await handler.UnlockAchievementAsync(appId, apiName, ct);
-                if (ok) await SaveUnlockedAsync(id, ct);
+                if (ok)
+                {
+                    await SaveUnlockedAsync(id, ct);
+                    // Update in-memory base so GetElapsedSessionTime stays accurate
+                    // relative to this newly unlocked achievement.
+                    _lastUnlockedOffset[appId] = offsetMinutes;
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -129,9 +201,10 @@ public class UnlockSchedulerService(
             .FirstOrDefaultAsync(a => a.Id == achievementId, ct);
         if (ach == null) return;
         ach.IsUnlocked = true;
-        // Fetch the timestamp Steam actually recorded — falls back to UtcNow if unavailable.
         ach.UnlockedAt = await FetchSteamUnlockTimeAsync(scope, ach.AppId, ach.ApiName, ct)
                          ?? DateTime.UtcNow;
+        // Reset persisted delta — the new base is this achievement's offset.
+        ach.Game.SavedIdleDeltaMinutes = 0;
         await db.SaveChangesAsync(ct);
 
         notifier.Notify(new UnlockedAchievementInfo(
@@ -140,10 +213,6 @@ public class UnlockSchedulerService(
             IconUrl: ach.IconUrl));
     }
 
-    /// <summary>
-    /// Queries Steam's GetPlayerAchievements API immediately after an unlock to retrieve
-    /// the timestamp that Steam's servers recorded. Returns null on any failure.
-    /// </summary>
     private async Task<DateTime?> FetchSteamUnlockTimeAsync(
         IServiceScope scope, int appId, string apiName, CancellationToken ct)
     {
@@ -172,5 +241,4 @@ public class UnlockSchedulerService(
             return null;
         }
     }
-
 }

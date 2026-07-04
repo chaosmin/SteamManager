@@ -47,7 +47,7 @@ else
     </div>
     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
         App ID: @_game.AppId &nbsp;|&nbsp;
-        Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @(_game.ReferencePlayMinutes.HasValue ? $"{_game.ReferencePlayMinutes.Value / 60.0:F2}h" : $"{_game.TargetHours}h")
+        Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @(_game.ReferencePlayMinutes.HasValue ? $"{_game.ReferencePlayMinutes.Value / 60.0:F2}h" : "10h")
         @if (_total > 0)
         {
             <span> &nbsp;|&nbsp; Achievements: @_unlocked / @_total unlocked</span>

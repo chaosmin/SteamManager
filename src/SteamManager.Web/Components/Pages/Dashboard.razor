@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
+@inject IUnlockSchedulerService SchedulerService
 @inject IServiceScopeFactory ScopeFactory
 @implements IDisposable
 @using SteamManager.Core.Services
@@ -124,6 +125,21 @@ else
                                     </MudText>
                                 </div>
                             </div>
+                            @if (_upcomingAchs.Count > 0)
+                            {
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
+                                    @foreach (var ach in _upcomingAchs)
+                                    {
+                                        var rem = SchedulerService.GetTimeUntilNext(_runningGame!.AppId, ach.OffsetMinutes);
+                                        var tip = $"{ach.Name}  ·  in {FormatMinutes(rem.HasValue ? (int)rem.Value.TotalMinutes : 0)}";
+                                        <MudTooltip Text="@tip" Arrow="true" Placement="Placement.Top">
+                                            <img src="@(ach.Icon ?? "")" width="32" height="32"
+                                                 style="border-radius:4px;opacity:0.45;cursor:default"
+                                                 onerror="this.style.display='none'" />
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            }
                         }
                     }
                 </div>
@@ -153,6 +169,9 @@ else
     int _runAchTotal, _runAchDone;
     string? _nextAchName, _nextAchIcon;
     int _minutesUntilNextAch;
+    List<UpcomingAch> _upcomingAchs = [];
+
+    record UpcomingAch(string Name, string? Icon, int OffsetMinutes);
 
     protected override async Task OnInitializedAsync()
     {
@@ -180,6 +199,7 @@ else
         int totalRemainingMinutes = 0, totalPlayedMinutes = 0, totalRefMinutes = 0;
         int totalAch = 0, totalUnlocked = 0, gamesWithAch = 0;
         _runningGame = null;
+        _upcomingAchs = [];
 
         foreach (var game in _games)
         {
@@ -188,8 +208,8 @@ else
                 ? game.ReferencePlayMinutes.Value
                 : achTotal > 0
                     ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
-                    : (int)(game.TargetHours * 60);
-            if (refMinutes == 0) refMinutes = (int)(game.TargetHours * 60);
+                    : 600;
+            if (refMinutes == 0) refMinutes = 600;
 
             totalRemainingMinutes += Math.Max(0, refMinutes - game.TotalPlayMinutes);
             totalPlayedMinutes += game.TotalPlayMinutes;
@@ -215,12 +235,29 @@ else
                 _runAchPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
 
                 var nextAch = game.Achievements
-                    .Where(a => !a.IsUnlocked && a.UnlockOffsetMinutes > game.TotalPlayMinutes)
+                    .Where(a => !a.IsUnlocked)
                     .OrderBy(a => a.UnlockOffsetMinutes)
                     .FirstOrDefault();
                 _nextAchName = nextAch != null ? (nextAch.DisplayNameI18n ?? nextAch.DisplayName) : null;
                 _nextAchIcon = nextAch?.IconUrl;
-                _minutesUntilNextAch = nextAch != null ? nextAch.UnlockOffsetMinutes - game.TotalPlayMinutes : 0;
+                if (nextAch != null)
+                {
+                    var remaining = SchedulerService.GetTimeUntilNext(game.AppId, nextAch.UnlockOffsetMinutes);
+                    _minutesUntilNextAch = remaining.HasValue ? (int)remaining.Value.TotalMinutes : 0;
+                }
+                else
+                {
+                    _minutesUntilNextAch = 0;
+                }
+                _upcomingAchs = game.Achievements
+                    .Where(a => !a.IsUnlocked)
+                    .OrderBy(a => a.UnlockOffsetMinutes)
+                    .Skip(1)
+                    .Select(a => new UpcomingAch(
+                        a.DisplayNameI18n ?? a.DisplayName,
+                        a.IconGrayUrl ?? a.IconUrl,
+                        a.UnlockOffsetMinutes))
+                    .ToList();
             }
         }
 
