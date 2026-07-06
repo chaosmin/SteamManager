@@ -176,52 +176,7 @@ Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-man
 
 ## Changelog
 
-### v0.3.2
-- Real-player achievement ordering via SteamHunters top player + Steam API; DLC batch detection splits achievements by calendar gaps >30 days
-- Catch-up achievements now spaced by original offset delta instead of firing simultaneously
-- ReferenceUrl preserved when manually set; supports `/profiles/{steamId64}/` URL format
-- Sidebar version number (dynamic from assembly); Dashboard portrait cover art (`library_600x900.jpg`)
-- GameDetail column reorder: Achievement → Global % → Status → Cost → Offset (gap from prev) → Unlock At
-
-### v0.3.1
-- Fix achievement scheduler: delta-based timer independent of `TotalPlayMinutes`; per-game progress persisted to DB (`SavedIdleDeltaMinutes`) across restarts
-- Fix Dashboard "Next Achievement" skipping achievements when playtime synced past offset; countdown now uses live scheduler timer
-- Add upcoming achievements icon row in Dashboard with per-icon hover countdown
-- Add server-validated achievement badge on game cards (detected from audit log failures)
-- DB columns renamed to snake_case across all tables; `created_at`/`updated_at` moved to end; `TargetHours` removed
-- 100% filter switch color fixed (visible on dark background)
-
-### v0.3.0
-- Play Queue: background auto-idling through a prioritized game queue
-- Scheduler resume: paused queue entries resume unlock schedule from saved offset
-- Startup table guard: idempotent table creation on startup to handle migration state mismatch
-
-### v0.2.4
-- Audit log: all Steam API and SteamKit2 calls logged to `steam_audit_log` table
-- Achievement unlock timestamp synced from Steam server
-- Games page: lazy achievement load, improved filter/sort performance
-- 100% filter toggle added to Games page
-
-### v0.2.2
-- Auto-reconnect on unexpected Steam disconnect: session is restored automatically from the saved token (5 s delay, exponential backoff); game idling resumes immediately after reconnect
-- Fix duplicate callback loop: `Connect()` now cancels the previous loop before starting a new one
-- Sync on demand only: background sync no longer falls back to a default daily schedule — it waits for a manual trigger unless a cron expression is explicitly configured in Settings
-
-### v0.2.1
-- Fix achievement unlock: proper two-step `GetUserStats → StoreUserStats2` with binary KeyValue schema parsing
-- Add in-app achievement unlock toast (icon + game name)
-- Add Steam trading card drops tracking and filter toggle on Games page
-- Redesign Dashboard: global summary panels + currently playing with next-achievement countdown + 1-min auto-refresh
-- Enforce single-game: starting a game auto-stops the current one
-- Move Language and Timezone selectors to top nav bar
-- Reorganize Settings: Web API Key moved under Steam Account
-- Add achievement description display in GameDetail
-
-### v0.2.0
-- Multi-language support (English / 简体中文)
-- Achievement unlock scheduling with SteamHunters data
-- Global background sync with cron schedule
-- MudBlazor Material Design UI
+See [docs/changelog/](docs/changelog/) for version history.
 
 ## Acknowledgements
 

@@ -70,25 +70,21 @@ public class AchievementDataService(
             var unlocked = playerAchs.Where(a => a.UnlockTime.HasValue).ToList();
             if (unlocked.Count > 0)
             {
-                // Steam timestamps are wall-clock time (player may stop for weeks between sessions).
-                // Preserve only the ORDER; distribute evenly across medianCompletionTime.
-                var (medianMinutes, _) = await hunters.GetAppInfoAsync(appId, ct);
+                // Use real unlock timestamps from the player (median across players when multiple available).
+                // Timestamps are wall-clock; Calculate() computes relative offsets from first unlock.
                 var schemaMap = schema.ToDictionary(a => a.ApiName);
-                var orderedPairs = unlocked
-                    .OrderBy(a => a.UnlockTime)
+                var playerUnlocked = unlocked
                     .Where(a => schemaMap.ContainsKey(a.ApiName))
-                    .Select(a => (Schema: schemaMap[a.ApiName], Ts: a.UnlockTime!.Value))
                     .ToList();
-                var orderedSchema = orderedPairs.Select(p => p.Schema).ToList();
-                var timestamps = orderedPairs.Select(p => p.Ts).ToList();
-                var targetMinutes = medianMinutes > 0 ? medianMinutes : orderedSchema.Count * FallbackInterval * 10;
-                intervals = AchievementIntervalCalculator.CalculateFromPlayerOrderBatched(orderedSchema, timestamps, targetMinutes);
+                intervals = AchievementIntervalCalculator.Calculate(
+                    new List<List<SteamAchievementDto>> { playerUnlocked });
                 referenceUrl = username != null
                     ? $"https://steamhunters.com/id/{username}/apps/{appId}/achievements"
                     : $"https://steamhunters.com/profiles/{resolvedSteamId.Value}/apps/{appId}/achievements";
                 logger.LogInformation(
-                    "Steam API: player {Player}: {Count} achievements ordered, distributed over {Target}min",
-                    username ?? resolvedSteamId.Value.ToString(), unlocked.Count, targetMinutes);
+                    "Steam API: player {Player}: {Count} achievements with real timestamps, span={Span}min",
+                    username ?? resolvedSteamId.Value.ToString(), playerUnlocked.Count,
+                    intervals.Count > 0 ? intervals.Max(i => i.OffsetMinutes) : 0);
             }
             else
             {

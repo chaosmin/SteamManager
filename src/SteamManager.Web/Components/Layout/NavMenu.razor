@@ -16,8 +16,9 @@
 
 @code {
     private static readonly string _version =
-        System.Reflection.CustomAttributeExtensions
+        (System.Reflection.CustomAttributeExtensions
             .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
                 typeof(NavMenu).Assembly)
-            ?.InformationalVersion ?? "dev";
+            ?.InformationalVersion ?? "dev")
+        .Split('+')[0];
 }
