@@ -19,12 +19,13 @@ Run in background and wait ~8s, then confirm it prints `Now listening on: http:/
 When asked to publish a version:
 
 1. **Review commits** — `git log <last-tag>..HEAD --oneline` to summarize what changed
-2. **Update README** — add a new `### vX.Y.Z` entry at the top of the `## Changelog` section in `README.md`
-3. **Write changelog** — create `docs/changelog/X.Y.Z.md` (bilingual EN + ZH) following the existing pattern in that directory
-4. **Commit** — stage all modified/new files and commit with message `docs: vX.Y.Z — <one-line summary>`
-5. **Tag** — `git tag vX.Y.Z`
-6. **Push** — `git push && git push --tags`
-7. **Stop local server** — `pkill -f "SteamManager.Web" 2>/dev/null`
+2. **Bump version** — update `<Version>X.Y.Z</Version>` in `src/SteamManager.Web/SteamManager.Web.csproj` (displayed in the sidebar UI)
+3. **Update README** — add a new `### vX.Y.Z` entry at the top of the `## Changelog` section in `README.md`
+4. **Write changelog** — create `docs/changelog/X.Y.Z.md` (bilingual EN + ZH) following the existing pattern in that directory
+5. **Commit** — stage all modified/new files and commit with message `docs: vX.Y.Z — <one-line summary>`
+6. **Tag** — `git tag vX.Y.Z`
+7. **Push** — `git push && git push --tags`
+8. **Stop local server** — `pkill -f "SteamManager.Web" 2>/dev/null`
 
 Version bump rules:
 - **Minor version** (patch): last digit +1 → `v0.3.0` → `v0.3.1`

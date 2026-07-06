@@ -17,6 +17,9 @@ public class Game
     // Reference play minutes: median total playtime of 100%-completion reference players
     public int? ReferencePlayMinutes { get; set; }
 
+    // URL of the SteamHunter (or similar) reference page used to derive achievement unlock order/timing
+    public string? ReferenceUrl { get; set; }
+
     // Persisted idle-session delta: minutes elapsed beyond lastUnlockedOffset at last stop.
     // Restored by UnlockSchedulerService on restart to resume the built-in timer.
     public int SavedIdleDeltaMinutes { get; set; }

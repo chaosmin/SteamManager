@@ -210,6 +210,10 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("int")
                         .HasColumnName("reference_play_minutes");
 
+                    b.Property<string>("ReferenceUrl")
+                        .HasColumnType("longtext")
+                        .HasColumnName("reference_url");
+
                     b.Property<int>("SavedIdleDeltaMinutes")
                         .HasColumnType("int")
                         .HasColumnName("saved_idle_delta_minutes");

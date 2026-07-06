@@ -55,8 +55,21 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PlayQueueService>(
 builder.Services.AddSingleton<IPlayQueueService>(sp => sp.GetRequiredService<PlayQueueService>());
 
 // HTTP clients
+builder.Services.AddSingleton<PlaywrightBrowserService>();
 builder.Services.AddHttpClient<SteamWebApiClient>();
-builder.Services.AddHttpClient<SteamHuntersClient>();
+builder.Services.AddHttpClient<SteamHuntersClient>(client =>
+{
+    // Browser-like headers required to bypass SteamHunters bot detection on HTML pages
+    client.DefaultRequestHeaders.Add("User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.Add("Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+    client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+    client.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
+    client.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "navigate");
+    client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "none");
+    client.DefaultRequestHeaders.Add("Upgrade-Insecure-Requests", "1");
+});
 builder.Services.AddHttpClient<SteamCommunityClient>();
 
 // MudBlazor

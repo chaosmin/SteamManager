@@ -176,6 +176,13 @@ Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-man
 
 ## Changelog
 
+### v0.3.2
+- Real-player achievement ordering via SteamHunters top player + Steam API; DLC batch detection splits achievements by calendar gaps >30 days
+- Catch-up achievements now spaced by original offset delta instead of firing simultaneously
+- ReferenceUrl preserved when manually set; supports `/profiles/{steamId64}/` URL format
+- Sidebar version number (dynamic from assembly); Dashboard portrait cover art (`library_600x900.jpg`)
+- GameDetail column reorder: Achievement → Global % → Status → Cost → Offset (gap from prev) → Unlock At
+
 ### v0.3.1
 - Fix achievement scheduler: delta-based timer independent of `TotalPlayMinutes`; per-game progress persisted to DB (`SavedIdleDeltaMinutes`) across restarts
 - Fix Dashboard "Next Achievement" skipping achievements when playtime synced past offset; countdown now uses live scheduler timer

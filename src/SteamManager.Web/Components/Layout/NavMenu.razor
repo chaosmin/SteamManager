@@ -9,3 +9,15 @@
         Settings
     </MudNavLink>
 </MudNavMenu>
+
+<MudSpacer />
+
+<MudText Typo="Typo.caption" Class="pa-4" Style="opacity:0.4">@_version</MudText>
+
+@code {
+    private static readonly string _version =
+        System.Reflection.CustomAttributeExtensions
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
+                typeof(NavMenu).Assembly)
+            ?.InformationalVersion ?? "dev";
+}

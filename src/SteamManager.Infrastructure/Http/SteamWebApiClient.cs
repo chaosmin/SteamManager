@@ -114,6 +114,27 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         catch { return null; }
     }
 
+    /// <summary>Resolves a Steam vanity URL to a Steam64 ID. Returns null on failure or private/not-found.</summary>
+    public async Task<long?> ResolveVanityUrlAsync(string vanityUrl, string apiKey, CancellationToken ct = default)
+    {
+        try
+        {
+            await Task.Delay(CallDelay, ct);
+            var url = $"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key={apiKey}&vanityurl={vanityUrl}";
+            var json = await FetchWithRetryAsync(url, ct, "ResolveVanityURL");
+            var resp = JsonDocument.Parse(json).RootElement.GetProperty("response");
+            if (resp.GetProperty("success").GetInt32() == 1 &&
+                long.TryParse(resp.GetProperty("steamid").GetString(), out var id))
+                return id;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "ResolveVanityURL failed for {VanityUrl}", vanityUrl);
+            return null;
+        }
+    }
+
     /// <summary>Returns playtime_forever (minutes) for a specific player+game. Returns 0 on failure or private profile.</summary>
     public async Task<int> GetPlayerGamePlaytimeAsync(long steamId, int appId, string apiKey, CancellationToken ct = default)
     {

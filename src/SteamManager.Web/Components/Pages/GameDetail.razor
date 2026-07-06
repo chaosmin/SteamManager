@@ -45,7 +45,7 @@ else
             </MudButton>
         </div>
     </div>
-    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
+    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-2">
         App ID: @_game.AppId &nbsp;|&nbsp;
         Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @(_game.ReferencePlayMinutes.HasValue ? $"{_game.ReferencePlayMinutes.Value / 60.0:F2}h" : "10h")
         @if (_total > 0)
@@ -57,6 +57,35 @@ else
             <span> &nbsp;|&nbsp; Last synced: @FormatTime(_game.AchievementsCachedAt.Value)</span>
         }
     </MudText>
+
+    <div class="d-flex align-center gap-2 mb-4" style="flex-wrap:wrap">
+        @if (_editingUrl)
+        {
+            <MudTextField @bind-Value="_referenceUrl" Placeholder="https://steamhunter.com/app/..."
+                          Style="min-width:320px" Margin="Margin.Dense" Variant="Variant.Outlined"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       OnClick="SaveReferenceUrlAsync">Save</MudButton>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       OnClick="@(() => { _editingUrl = false; _referenceUrl = _game.ReferenceUrl; })">Cancel</MudButton>
+        }
+        else if (!string.IsNullOrWhiteSpace(_game.ReferenceUrl))
+        {
+            <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" Style="color:rgba(255,255,255,0.45)" />
+            <MudLink Href="@_game.ReferenceUrl" Target="_blank" Typo="Typo.body2"
+                     Style="color:#66c0f4;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                @_game.ReferenceUrl
+            </MudLink>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                           OnClick="@(() => _editingUrl = true)" Title="Edit reference URL" />
+        }
+        else
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.AddLink"
+                       Style="color:rgba(255,255,255,0.4)"
+                       OnClick="@(() => _editingUrl = true)">Set reference URL</MudButton>
+        }
+    </div>
 
     @if (_loading)
     {
@@ -82,10 +111,11 @@ else
             <HeaderContent>
                 <MudTh Style="width:48px"></MudTh>
                 <MudTh>Achievement</MudTh>
-                <MudTh>Unlock At</MudTh>
                 <MudTh>Global %</MudTh>
                 <MudTh>Status</MudTh>
-                <MudTh>Time</MudTh>
+                <MudTh>Cost</MudTh>
+                <MudTh>Offset</MudTh>
+                <MudTh>Unlock At</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>
@@ -108,9 +138,6 @@ else
                     }
                 </MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60}h {context.UnlockOffsetMinutes % 60}m")</MudText>
-                </MudTd>
-                <MudTd>
                     <MudText Typo="Typo.caption">@($"{context.GlobalPercent:F1}%")</MudText>
                 </MudTd>
                 <MudTd>
@@ -122,6 +149,13 @@ else
                     {
                         <MudChip T="string" Size="Size.Small" Color="Color.Default">Locked</MudChip>
                     }
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60}h {context.UnlockOffsetMinutes % 60}m")</MudText>
+                </MudTd>
+                <MudTd>
+                    @{ var delta = _offsetDeltas.GetValueOrDefault(context.Id, context.UnlockOffsetMinutes); }
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.5)">+@($"{delta / 60}h {delta % 60}m")</MudText>
                 </MudTd>
                 <MudTd>
                     @if (context.IsUnlocked && context.UnlockedAt.HasValue)
@@ -160,6 +194,8 @@ else
     bool _forceReplaying;
     string? _loadError;
     string _timezone = "UTC";
+    string? _referenceUrl;
+    bool _editingUrl;
 
     private List<BreadcrumbItem> _breadcrumbs =
     [
@@ -178,6 +214,7 @@ else
 
         if (_game == null) return;
         _breadcrumbs[1] = new(_game.NameI18n ?? _game.Name, href: null, disabled: true);
+        _referenceUrl = _game.ReferenceUrl;
 
         if (_game.Achievements.Count == 0)
             await RefreshAchievementsAsync();
@@ -256,11 +293,34 @@ else
         }
     }
 
+    async Task SaveReferenceUrlAsync()
+    {
+        if (_game == null) return;
+        var game = await Db.Games.FirstAsync(g => g.Id == _game.Id);
+        game.ReferenceUrl = string.IsNullOrWhiteSpace(_referenceUrl) ? null : _referenceUrl.Trim();
+        await Db.SaveChangesAsync();
+        _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).FirstOrDefaultAsync(g => g.Id == Id);
+        _referenceUrl = _game?.ReferenceUrl;
+        _editingUrl = false;
+        Snackbar.Add("Reference URL saved", Severity.Success);
+    }
+
+    Dictionary<int, int> _offsetDeltas = new();
+
     void UpdateCounts()
     {
         if (_game == null) return;
         _total = _game.Achievements.Count;
         _unlocked = _game.Achievements.Count(a => a.IsUnlocked);
+
+        _offsetDeltas.Clear();
+        var ordered = _game.Achievements.OrderBy(a => a.UnlockOffsetMinutes).ToList();
+        int prev = 0;
+        foreach (var a in ordered)
+        {
+            _offsetDeltas[a.Id] = a.UnlockOffsetMinutes - prev;
+            prev = a.UnlockOffsetMinutes;
+        }
     }
 
     string FormatTime(DateTime utc, string format = "yyyy-MM-dd HH:mm")

@@ -86,6 +86,83 @@ public static class AchievementIntervalCalculator
                   .ToList();
     }
 
+    /// <summary>
+    /// Distributes achievements evenly across totalMinutes in the provided order.
+    /// Use when you have a reliable unlock order from a real player but not reliable timing
+    /// (Steam API timestamps are wall-clock time, not in-game session time).
+    /// </summary>
+    public static List<AchievementIntervalDto> CalculateFromPlayerOrder(
+        IReadOnlyList<SteamAchievementDto> achievementsInOrder,
+        int totalMinutes)
+    {
+        if (achievementsInOrder.Count == 0 || totalMinutes <= 0) return [];
+        var n = achievementsInOrder.Count;
+        return achievementsInOrder
+            .Select((a, i) => new AchievementIntervalDto(a.ApiName, (int)Math.Round((double)(i + 1) / n * totalMinutes)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Like CalculateFromPlayerOrder but detects DLC/update batches by large calendar gaps
+    /// (default: >30 days) in the player's unlock timestamps.
+    /// Each batch is distributed proportionally across (totalMinutes / batchCount),
+    /// and batches are separated by interBatchGapMinutes to represent the DLC release gap.
+    /// </summary>
+    public static List<AchievementIntervalDto> CalculateFromPlayerOrderBatched(
+        IReadOnlyList<SteamAchievementDto> achievementsInOrder,
+        IReadOnlyList<long> unlockTimestampsSec,
+        int totalMinutes,
+        long batchGapThresholdSec = 30L * 24 * 3600,
+        int interBatchGapMinutes = 60)
+    {
+        if (achievementsInOrder.Count == 0 || totalMinutes <= 0) return [];
+        if (achievementsInOrder.Count != unlockTimestampsSec.Count)
+            return CalculateFromPlayerOrder(achievementsInOrder, totalMinutes);
+
+        // Split into batches wherever consecutive timestamps differ by more than the threshold
+        var batches = new List<List<int>>(); // each list = indices into achievementsInOrder
+        var current = new List<int> { 0 };
+        for (int i = 1; i < unlockTimestampsSec.Count; i++)
+        {
+            if (unlockTimestampsSec[i] - unlockTimestampsSec[i - 1] > batchGapThresholdSec)
+            {
+                batches.Add(current);
+                current = [];
+            }
+            current.Add(i);
+        }
+        batches.Add(current);
+
+        // Only one batch — fall back to even distribution
+        if (batches.Count == 1)
+            return CalculateFromPlayerOrder(achievementsInOrder, totalMinutes);
+
+        // Distribute totalMinutes across batches proportionally by batch size,
+        // then add interBatchGapMinutes between batches.
+        var totalGapMinutes = (batches.Count - 1) * interBatchGapMinutes;
+        var playMinutes = Math.Max(totalMinutes - totalGapMinutes, batches.Count); // at least 1 min per batch
+        var result = new List<AchievementIntervalDto>(achievementsInOrder.Count);
+        int batchOffset = 0;
+
+        for (int b = 0; b < batches.Count; b++)
+        {
+            var batch = batches[b];
+            var batchShare = (int)Math.Round((double)batch.Count / achievementsInOrder.Count * playMinutes);
+            if (batchShare < 1) batchShare = 1;
+
+            for (int j = 0; j < batch.Count; j++)
+            {
+                var idx = batch[j];
+                var minuteInBatch = (int)Math.Round((double)(j + 1) / batch.Count * batchShare);
+                result.Add(new AchievementIntervalDto(achievementsInOrder[idx].ApiName, batchOffset + minuteInBatch));
+            }
+
+            batchOffset += batchShare + interBatchGapMinutes;
+        }
+
+        return result;
+    }
+
     private static int Median(List<int> values)
     {
         var s = values.OrderBy(x => x).ToList();

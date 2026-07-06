@@ -11,4 +11,6 @@ public interface IUnlockSchedulerService
     TimeSpan? GetElapsedSessionTime(int appId);
     /// <summary>Returns how long until the achievement at targetOffsetMinutes unlocks, using the live session timer.</summary>
     TimeSpan? GetTimeUntilNext(int appId, int targetOffsetMinutes);
+    /// <summary>Fires when the scheduler loop finishes all pending achievements for a game.</summary>
+    event Action<int>? ScheduleCompleted;
 }

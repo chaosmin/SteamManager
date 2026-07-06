@@ -82,6 +82,8 @@ public class PlayQueueService(
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        schedulerService.ScheduleCompleted += OnScheduleCompleted;
+
         // Give the app time to finish startup before first poll
         await Task.Delay(TimeSpan.FromSeconds(30), ct);
 
@@ -93,6 +95,17 @@ public class PlayQueueService(
 
             await Task.Delay(TimeSpan.FromMinutes(5), ct);
         }
+
+        schedulerService.ScheduleCompleted -= OnScheduleCompleted;
+    }
+
+    private void OnScheduleCompleted(int appId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await TickAsync(CancellationToken.None); }
+            catch (Exception ex) { logger.LogError(ex, "PlayQueue: immediate tick error after app {AppId} completed", appId); }
+        });
     }
 
     private async Task TickAsync(CancellationToken ct)

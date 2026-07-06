@@ -23,6 +23,8 @@ public class UnlockSchedulerService(
     // always returns the delta relative to the most recent unlock.
     private readonly Dictionary<int, int> _lastUnlockedOffset = [];
 
+    public event Action<int>? ScheduleCompleted;
+
     public bool IsRunning(int appId) => _running.ContainsKey(appId);
 
     public TimeSpan? GetTimeUntilNext(int appId, int targetOffsetMinutes)
@@ -147,6 +149,8 @@ public class UnlockSchedulerService(
             if (pending.Count == 0) return;
             logger.LogInformation("Scheduler: {Count} achievements pending for app {AppId}", pending.Count, appId);
 
+            int prevOffset = _lastUnlockedOffset.TryGetValue(appId, out var initialOffset) ? initialOffset : 0;
+
             foreach (var (id, apiName, offsetMinutes) in pending)
             {
                 if (ct.IsCancellationRequested) break;
@@ -154,15 +158,26 @@ public class UnlockSchedulerService(
                 // Achievement unlocks when sessionStart + offset is reached,
                 // i.e. after (offset − lastUnlockedOffset − savedDelta) idle minutes.
                 var targetTime = sessionStart.AddMinutes(offsetMinutes);
-                var waitMs = (int)(targetTime - DateTime.UtcNow).TotalMilliseconds;
+                var waitMs = (long)(targetTime - DateTime.UtcNow).TotalMilliseconds;
                 if (waitMs > 0)
                 {
-                    var deltaLog = _lastUnlockedOffset.TryGetValue(appId, out var lo) ? offsetMinutes - lo : offsetMinutes;
+                    var deltaLog = offsetMinutes - prevOffset;
                     logger.LogInformation(
                         "Scheduler: waiting {Wait}s for {AchId} (delta {Delta}min) app {AppId}",
                         waitMs / 1000, apiName, deltaLog, appId);
-                    await Task.Delay(waitMs, ct);
+                    await Task.Delay((int)Math.Min(waitMs, int.MaxValue), ct);
                 }
+                else
+                {
+                    // Catch-up: achievement is overdue. Wait the same gap as the original
+                    // schedule so the cadence feels natural (offsetDelta minutes).
+                    var catchUpMs = Math.Max(offsetMinutes - prevOffset, 1) * 60_000;
+                    logger.LogInformation(
+                        "Scheduler: catch-up {AchId} — waiting {Wait}s (offset delta) app {AppId}",
+                        apiName, catchUpMs / 1000, appId);
+                    await Task.Delay(catchUpMs, ct);
+                }
+                prevOffset = offsetMinutes;
 
                 // 1–100 s random jitter before unlock
                 await Task.Delay(Random.Shared.Next(1_000, 101_000), ct);
@@ -187,6 +202,9 @@ public class UnlockSchedulerService(
                     _lastUnlockedOffset[appId] = offsetMinutes;
                 }
             }
+            // All achievements processed — notify queue service to advance immediately
+            if (!ct.IsCancellationRequested)
+                ScheduleCompleted?.Invoke(appId);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { logger.LogError(ex, "Scheduler loop error for {AppId}", appId); }
