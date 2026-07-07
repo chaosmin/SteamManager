@@ -13,7 +13,7 @@ A self-hosted Steam automation service that idles game hours and unlocks achieve
 - **Game Hour Idling** — simulates gameplay to accumulate hours toward a configurable target
 - **Achievement Auto-Unlock** — two-step `GetUserStats → StoreUserStats2` protocol; derives unlock timing from [SteamHunters](https://steamhunters.com) median completion data; falls back to global unlock percentage ordering
 - **In-app Achievement Toast** — popup notification (with icon) when an achievement is unlocked, matching Steam overlay style
-- **Catch-up on Restart** — overdue achievements unlock in sequence (1–100 s random gaps) the moment a game session resumes
+- **Catch-up on Restart** — overdue achievements unlock in sequence the moment a game session resumes
 - **Checkpoint Resume** — tracks progress per-minute in MySQL; restarts pick up exactly where you left off
 - **Steam Trading Card Drops** — tracks remaining card drops per game via Steam Community badge page; filter toggle on Games page; synced automatically with library sync
 - **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores on every startup
@@ -176,7 +176,20 @@ Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-man
 
 ## Changelog
 
-See [docs/changelog/](docs/changelog/) for version history.
+### v0.3.3
+- Dashboard bento grid layout (4-column responsive CSS Grid)
+- Skeleton loading states on Games and GameDetail pages
+- Branded empty states with icons and CTAs (no more plain alerts)
+- Game card hover animation (scale + shadow)
+- Achievement icons enlarged 32 → 40 px in detail table
+- Global % column replaced with mini progress bar
+- Nav active state: left border indicator + tint
+- Page fade-in transition (respects `prefers-reduced-motion`)
+- Secondary text contrast bumped to meet AA (4.5:1)
+- Removed random 1–100 s jitter before achievement unlock
+- Deleted unused Blazor template stubs (Home, Counter, Weather)
+
+See [docs/changelog/](docs/changelog/) for full version history.
 
 ## Acknowledgements
 

@@ -179,9 +179,6 @@ public class UnlockSchedulerService(
                 }
                 prevOffset = offsetMinutes;
 
-                // 1–100 s random jitter before unlock
-                await Task.Delay(Random.Shared.Next(1_000, 101_000), ct);
-
                 // Skip if already unlocked by a concurrent sync
                 using (var scope = scopeFactory.CreateScope())
                 {

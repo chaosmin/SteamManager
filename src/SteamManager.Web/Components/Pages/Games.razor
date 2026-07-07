@@ -56,7 +56,29 @@
 
 @if (_loading)
 {
-    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
+    <!-- Skeleton loading grid -->
+    <div class="d-flex align-center flex-wrap gap-4 mb-4">
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="240px" Height="40px" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="160px" Height="40px" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="130px" Height="32px" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="60px" Height="32px" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="150px" Height="32px" />
+    </div>
+    <MudGrid Spacing="3">
+        @for (int i = 0; i < 8; i++)
+        {
+            <MudItem xs="12" sm="6" md="4" lg="3">
+                <MudPaper Elevation="3" Style="overflow:hidden;border-radius:4px">
+                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="100%" Height="120px" />
+                    <div style="padding:12px">
+                        <MudSkeleton SkeletonType="SkeletonType.Text" Width="80%" Class="mb-2" />
+                        <MudSkeleton SkeletonType="SkeletonType.Text" Width="50%" Class="mb-2" />
+                        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="100%" Height="6px" />
+                    </div>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
 }
 else
 {
@@ -82,10 +104,18 @@ else
 
     @if (_games.Count == 0)
     {
-        <MudAlert Severity="Severity.Info">
-            No games yet. Click <strong>Sync Library</strong> to import your Steam library
-            (requires Web API Key in Settings).
-        </MudAlert>
+        <MudPaper Elevation="2" Style="padding:48px 24px;border-radius:12px;text-align:center;border:1px dashed rgba(102,192,244,0.3)">
+            <MudIcon Icon="@Icons.Material.Filled.VideogameAsset" Style="font-size:56px;color:rgba(102,192,244,0.4);margin-bottom:16px" />
+            <MudText Typo="Typo.h6" Style="color:rgba(255,255,255,0.75);margin-bottom:8px">Library is empty</MudText>
+            <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.5);margin-bottom:24px">
+                Import your Steam library to get started. Requires a Web API key in Settings.
+            </MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Sync"
+                       OnClick="SyncLibrary" Disabled="_syncing">
+                @(_syncing ? "Syncing..." : "Sync Library")
+            </MudButton>
+        </MudPaper>
     }
     else
     {
@@ -115,7 +145,10 @@ else
 
         @if (filtered.Count == 0)
         {
-            <MudAlert Severity="Severity.Info">No games match the current filters.</MudAlert>
+            <MudPaper Elevation="1" Style="padding:32px 24px;border-radius:12px;text-align:center;border:1px dashed rgba(255,255,255,0.1)">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAltOff" Style="font-size:40px;color:rgba(255,255,255,0.2);margin-bottom:12px" />
+                <MudText Typo="Typo.body1" Style="color:rgba(255,255,255,0.5)">No games match the current filters</MudText>
+            </MudPaper>
         }
         else
         {
@@ -157,7 +190,7 @@ else
                     double achRedPct = 100.0 - achGreenPct;
 
                     <MudItem xs="12" sm="6" md="4" lg="3">
-                        <MudCard Elevation="3" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
+                        <MudCard Elevation="3" Class="game-card" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
                             <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
                                 <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
                                      style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"

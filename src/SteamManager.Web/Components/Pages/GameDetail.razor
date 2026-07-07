@@ -15,7 +15,14 @@
 
 @if (_game == null)
 {
-    <MudText>Loading...</MudText>
+    <!-- Skeleton for game header -->
+    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="460px" Height="180px" Class="mb-6" Style="border-radius:8px;max-width:100%" />
+    <MudSkeleton SkeletonType="SkeletonType.Text" Width="300px" Height="36px" Class="mb-2" />
+    <MudSkeleton SkeletonType="SkeletonType.Text" Width="480px" Class="mb-4" />
+    @for (int i = 0; i < 6; i++)
+    {
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="100%" Height="52px" Class="mb-1" Style="border-radius:4px" />
+    }
 }
 else
 {
@@ -109,9 +116,9 @@ else
         <MudTable Items="_game.Achievements.OrderBy(a => a.UnlockOffsetMinutes)"
                   Hover="true" Elevation="2" Dense="true">
             <HeaderContent>
-                <MudTh Style="width:48px"></MudTh>
+                <MudTh Style="width:56px"></MudTh>
                 <MudTh>Achievement</MudTh>
-                <MudTh>Global %</MudTh>
+                <MudTh Style="width:120px">Global %</MudTh>
                 <MudTh>Status</MudTh>
                 <MudTh>Cost</MudTh>
                 <MudTh>Offset</MudTh>
@@ -124,21 +131,24 @@ else
                     }
                     @if (icon != null)
                     {
-                        <img src="@icon" width="32" height="32" style="border-radius:4px" />
+                        <img src="@icon" width="40" height="40" style="border-radius:6px;display:block" />
                     }
                 </MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.body2">@(context.DisplayNameI18n ?? context.DisplayName)</MudText>
+                    <MudText Typo="Typo.body2" Style="font-weight:500">@(context.DisplayNameI18n ?? context.DisplayName)</MudText>
                     @{
                         var desc = context.DescriptionI18n ?? context.Description;
                     }
                     @if (!string.IsNullOrWhiteSpace(desc))
                     {
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">@desc</MudText>
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">@desc</MudText>
                     }
                 </MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.caption">@($"{context.GlobalPercent:F1}%")</MudText>
+                    <div class="d-flex align-center gap-1">
+                        <MudProgressLinear Value="@((double)context.GlobalPercent)" Size="Size.Small" Style="width:60px;flex-shrink:0" Rounded="true" />
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">@($"{context.GlobalPercent:F1}%")</MudText>
+                    </div>
                 </MudTd>
                 <MudTd>
                     @if (context.IsUnlocked)
