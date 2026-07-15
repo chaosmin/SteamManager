@@ -101,7 +101,6 @@ public class SyncBackgroundService(
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var steamApi = scope.ServiceProvider.GetRequiredService<SteamWebApiClient>();
-            var achievementService = scope.ServiceProvider.GetRequiredService<IAchievementDataService>();
 
             var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
             if (cfg?.WebApiKey == null)
@@ -113,32 +112,13 @@ public class SyncBackgroundService(
 
             var language = cfg.Language ?? "english";
 
-            // Step 1: sync library — updates playtime for all games
+            // Sync library — discovers new games and updates names
             if (session.SteamId64.HasValue)
                 await SyncLibraryAsync(db, steamApi, cfg.WebApiKey, session.SteamId64.Value, language, ct);
 
-            // Step 2: iterate ALL games for achievement sync
-            var games = await db.Games.ToListAsync(ct);
-            int total = games.Count;
-
-            for (int i = 0; i < total; i++)
-            {
-                if (ct.IsCancellationRequested) break;
-                var game = games[i];
-                SyncProgress = (i + 1) * 100 / Math.Max(total, 1);
-                SyncStatusMessage = $"{game.Name} ({i + 1}/{total})";
-                Notify();
-
-                try { await achievementService.LoadAchievementsAsync(game.Id, game.AppId, ct); }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Achievement sync failed for appId {AppId}", game.AppId);
-                }
-            }
-
             SyncProgress = 100;
-            SyncStatusMessage = $"Done — {total} games synced";
-            logger.LogInformation("Sync completed ({Total} games)", total);
+            SyncStatusMessage = "Done — library synced";
+            logger.LogInformation("Sync completed");
         }
         catch (Exception ex)
         {
@@ -171,8 +151,7 @@ public class SyncBackgroundService(
                 else
                     existing.NameI18n = name;
 
-                if (existing.TotalPlayMinutes != playtimeMinutes)
-                { existing.TotalPlayMinutes = playtimeMinutes; updated++; }
+                updated++;
             }
             else
             {
@@ -181,7 +160,6 @@ public class SyncBackgroundService(
                     AppId = appId,
                     Name = name,
                     NameI18n = language != "english" ? name : null,
-                    TotalPlayMinutes = playtimeMinutes,
                 });
                 added++;
             }

@@ -93,10 +93,11 @@ public partial class GameRefreshService(
                 "Enable 'Override burst detection' in the reference player panel to proceed.");
 
         // 10. Build already-unlocked set (these are skipped when scheduling)
-        var alreadyUnlocked = await db.Achievements
+        var alreadyUnlockedList = await db.Achievements
             .Where(a => a.GameId == gameId && a.IsUnlocked)
             .Select(a => a.ApiName)
-            .ToHashSetAsync(ct);
+            .ToListAsync(ct);
+        var alreadyUnlocked = alreadyUnlockedList.ToHashSet();
 
         // 11. Calculate scheduled UTC times
         var scheduleMap = AchievementIntervalCalculator.CalculateScheduledTimes(
