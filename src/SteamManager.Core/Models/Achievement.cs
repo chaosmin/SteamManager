@@ -3,8 +3,8 @@ namespace SteamManager.Core.Models;
 public class Achievement
 {
     public int Id { get; set; }
-    public int GameId { get; set; }       // FK to Game.Id
-    public int AppId { get; set; }        // denormalized for quick Steam API lookups
+    public int GameId { get; set; }
+    public int AppId { get; set; }
     public string ApiName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? DisplayNameI18n { get; set; }
@@ -14,10 +14,10 @@ public class Achievement
     public string? IconUrl { get; set; }
     public string? IconGrayUrl { get; set; }
 
-    // Unlock scheduling
-    public int UnlockOffsetMinutes { get; set; }  // relative to accumulated play time
+    // Scheduling
+    public DateTime? ScheduledUnlockAt { get; set; }  // UTC absolute time to unlock; null = not scheduled
     public bool IsUnlocked { get; set; }
-    public DateTime? UnlockedAt { get; set; }     // UTC
+    public DateTime? UnlockedAt { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
