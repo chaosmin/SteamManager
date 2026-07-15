@@ -4,6 +4,9 @@
 @inject IGameIdleService IdleService
 @inject IServiceScopeFactory ScopeFactory
 @inject NavigationManager Nav
+@inject IGameQueueService QueueService
+@inject AchievementUnlockNotifier Notifier
+@inject ISnackbar Snackbar
 @implements IDisposable
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
@@ -63,114 +66,208 @@ else
                 @($"{_achProgressPct:F1}%") completed
             </MudText>
         </MudPaper>
+    </div>
 
-        <!-- Currently Playing — full width -->
-        @if (_runningGame != null)
+    @* ── Queue Control Panel ── *@
+    <MudPaper Class="pa-4 mb-4" Style="background:rgba(255,255,255,0.03);" Elevation="0">
+        <div class="d-flex align-center justify-space-between mb-3">
+            <MudText Typo="Typo.h6">Queue</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.PlayArrow"
+                       Disabled="@(!_queue.Any(q => q.Status == GameStatus.Idle))"
+                       OnClick="StartQueue">
+                Start Queue
+            </MudButton>
+        </div>
+
+        @if (_queueLoading)
         {
-            <MudPaper Elevation="4" Class="bento-span-4" Style="border-radius:12px;overflow:hidden">
-                <div style="display:flex;align-items:stretch;flex-wrap:wrap">
-                    <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(_runningGame.AppId)/library_600x900.jpg"
-                         style="width:340px;object-fit:cover;flex-shrink:0;align-self:stretch"
-                         onerror="this.style.display='none'" />
-                    <div style="flex:1;padding:24px;min-width:220px">
-                        <div class="d-flex align-center justify-space-between mb-1">
-                            <div class="d-flex align-center" style="gap:8px;flex:1;min-width:0">
-                                <MudChip T="string" Color="Color.Success" Size="Size.Small">Running</MudChip>
-                                <MudText Typo="Typo.h5" Style="font-weight:700;cursor:pointer;text-decoration:underline dotted rgba(255,255,255,0.4)"
-                                         @onclick="@(() => Nav.NavigateTo($"/games/{_runningGame!.Id}"))">
-                                    @(_runningGame.NameI18n ?? _runningGame.Name)
-                                </MudText>
-                            </div>
-                            <MudTooltip Text="Stop game">
-                                <MudIconButton Icon="@Icons.Material.Filled.StopCircle"
-                                               Color="Color.Error" Size="Size.Medium"
-                                               Disabled="_stopping"
-                                               OnClick="StopCurrentGameAsync" />
-                            </MudTooltip>
-                        </div>
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)" Class="mb-4">
-                            App ID: @_runningGame.AppId
-                        </MudText>
-
-                        <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
-                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="mr-1" />
-                            Idle Time
-                        </MudText>
-                        <div class="d-flex align-center gap-3 mb-1">
-                            <MudText Typo="Typo.h6" Style="color:#66c0f4;font-weight:700;min-width:80px">
-                                @($"{_runRemainingH:F1}h") <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
-                            </MudText>
-                            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
-                                @($"{_runPlayedH:F1}h") / @($"{_runRefH:F1}h")
-                            </MudText>
-                        </div>
-                        <MudProgressLinear Color="Color.Primary" Value="@_runIdlePct" Rounded="true" Size="Size.Medium" Class="mb-4" />
-
-                        @if (_runAchTotal > 0)
-                        {
-                            <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
-                                <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Class="mr-1" />
-                                Achievements
-                            </MudText>
-                            <div class="d-flex align-center gap-3 mb-1">
-                                <MudText Typo="Typo.h6" Style="color:#ffd700;font-weight:700;min-width:80px">
-                                    @(_runAchTotal - _runAchDone) <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
-                                </MudText>
-                                <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
-                                    @_runAchDone / @_runAchTotal unlocked
-                                </MudText>
-                            </div>
-                            <MudProgressLinear Color="Color.Warning" Value="@_runAchPct" Rounded="true" Size="Size.Medium" Class="mb-4" />
-
-                            @if (_nextAchName != null)
-                            {
-                                <MudDivider Class="mb-3" Style="opacity:0.2" />
-                                <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-1" />
-                                    Next Achievement
-                                </MudText>
-                                <div class="d-flex align-center gap-3">
-                                    @if (!string.IsNullOrEmpty(_nextAchIcon))
-                                    {
-                                        <img src="@_nextAchIcon" style="width:40px;height:40px;border-radius:4px;flex-shrink:0;opacity:0.6" />
-                                    }
-                                    <div>
-                                        <MudText Typo="Typo.body1" Style="font-weight:600">@_nextAchName</MudText>
-                                        <MudText Typo="Typo.caption" Style="color:#66c0f4">
-                                            in @FormatMinutes(_minutesUntilNextAch)
-                                        </MudText>
-                                    </div>
-                                </div>
-                                @if (_upcomingAchs.Count > 0)
-                                {
-                                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
-                                        @foreach (var ach in _upcomingAchs)
-                                        {
-                                            <MudTooltip Text="@ach.Name" Arrow="true" Placement="Placement.Top">
-                                                <img src="@(ach.Icon ?? "")" width="32" height="32"
-                                                     style="border-radius:4px;opacity:0.45;cursor:default"
-                                                     onerror="this.style.display='none'" />
-                                            </MudTooltip>
-                                        }
-                                    </div>
-                                }
-                            }
-                        }
-                    </div>
-                </div>
-            </MudPaper>
+            <MudSkeleton Height="48px" Class="mb-1" />
+            <MudSkeleton Height="48px" />
+        }
+        else if (!_queue.Any())
+        {
+            <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.45)">
+                Queue is empty. Refresh a game with a reference player configured.
+            </MudText>
         }
         else
         {
-            <MudPaper Elevation="1" Class="bento-span-4" Style="padding:32px 24px;border-radius:12px;text-align:center;border:1px dashed rgba(255,255,255,0.1)">
-                <MudIcon Icon="@Icons.Material.Filled.PlayCircleOutline" Style="font-size:40px;color:rgba(255,255,255,0.2);margin-bottom:12px" />
-                <MudText Typo="Typo.body1" Style="color:rgba(255,255,255,0.45)">No game is currently running</MudText>
-                <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.3);margin-top:4px">
-                    Go to <MudLink Href="games" Style="color:#66c0f4">Games</MudLink> to start one
-                </MudText>
-            </MudPaper>
+            <MudDropContainer T="QueueEntry" Items="_queue" ItemDropped="OnQueueItemDropped"
+                              ItemsSelector="@((item, _) => true)">
+                <ChildContent>
+                    <MudDropZone T="QueueEntry" Identifier="queue" Class="d-flex flex-column gap-1">
+                        @foreach (var item in _queue)
+                        {
+                            <MudPaper Elevation="0" Class="d-flex align-center gap-3 pa-2"
+                                      Style="@($"border-radius:6px;background:rgba(255,255,255,0.04);{GetQueueRowBorderStyle(item.Status)}")">
+                                <MudIcon Icon="@Icons.Material.Filled.DragIndicator"
+                                         Style="@(item.Status == GameStatus.Idle
+                                             ? "color:rgba(255,255,255,0.3);cursor:grab"
+                                             : "color:rgba(255,255,255,0.1);cursor:default")" />
+                                <MudImage Src="@item.HeaderUrl" Width="48" Height="22"
+                                          ObjectFit="ObjectFit.Cover" Style="border-radius:3px" />
+                                <MudText Typo="Typo.body2" Class="flex-grow-1">
+                                    @(item.NameI18n ?? item.Name)
+                                </MudText>
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@GetQueueStatusColor(item.Status)">
+                                    @item.Status.ToString()
+                                </MudChip>
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                               Disabled="@(item.Status != GameStatus.Idle)"
+                                               OnClick="@(() => RemoveFromQueue(item.GameId))" />
+                            </MudPaper>
+                        }
+                    </MudDropZone>
+                </ChildContent>
+            </MudDropContainer>
         }
-    </div>
+    </MudPaper>
+
+    @* ── Playing + Scheduled Cards ── *@
+    @if (_queue.Any(q => q.Status == GameStatus.Playing))
+    {
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px">
+            @foreach (var item in _queue.Where(q => q.Status == GameStatus.Playing))
+            {
+                <MudCard Style="background:rgba(255,255,255,0.04)">
+                    <MudCardMedia Image="@item.HeaderUrl" Height="110" />
+                    <MudCardContent>
+                        <div class="d-flex align-center justify-space-between mb-1">
+                            <MudText Typo="Typo.h6">@(item.NameI18n ?? item.Name)</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">Playing</MudChip>
+                        </div>
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)">
+                            Idling…
+                        </MudText>
+                    </MudCardContent>
+                    <MudCardActions>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   OnClick="@(() => RemoveFromQueue(item.GameId))">Stop</MudButton>
+                    </MudCardActions>
+                </MudCard>
+            }
+        </div>
+    }
+
+    @if (_queue.Any(q => q.Status == GameStatus.Scheduled))
+    {
+        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)" Class="mb-2">Scheduled</MudText>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px">
+            @foreach (var item in _queue.Where(q => q.Status == GameStatus.Scheduled))
+            {
+                <MudCard Style="background:rgba(255,255,255,0.03);border-left:3px solid #3B82F6">
+                    <MudCardContent>
+                        <div class="d-flex align-center justify-space-between">
+                            <MudText Typo="Typo.body1">@(item.NameI18n ?? item.Name)</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary">Scheduled</MudChip>
+                        </div>
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)" Class="mt-1">
+                            Playtime goal reached · achievements still unlocking
+                        </MudText>
+                    </MudCardContent>
+                </MudCard>
+            }
+        </div>
+    }
+
+    @* ── Legacy currently-running game detail (when idled via old direct-start path) ── *@
+    @if (_runningGame != null)
+    {
+        <MudPaper Elevation="4" Class="mt-4" Style="border-radius:12px;overflow:hidden">
+            <div style="display:flex;align-items:stretch;flex-wrap:wrap">
+                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(_runningGame.AppId)/library_600x900.jpg"
+                     style="width:340px;object-fit:cover;flex-shrink:0;align-self:stretch"
+                     onerror="this.style.display='none'" />
+                <div style="flex:1;padding:24px;min-width:220px">
+                    <div class="d-flex align-center justify-space-between mb-1">
+                        <div class="d-flex align-center" style="gap:8px;flex:1;min-width:0">
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small">Running</MudChip>
+                            <MudText Typo="Typo.h5" Style="font-weight:700;cursor:pointer;text-decoration:underline dotted rgba(255,255,255,0.4)"
+                                     @onclick="@(() => Nav.NavigateTo($"/games/{_runningGame!.Id}"))">
+                                @(_runningGame.NameI18n ?? _runningGame.Name)
+                            </MudText>
+                        </div>
+                        <MudTooltip Text="Stop game">
+                            <MudIconButton Icon="@Icons.Material.Filled.StopCircle"
+                                           Color="Color.Error" Size="Size.Medium"
+                                           Disabled="_stopping"
+                                           OnClick="StopCurrentGameAsync" />
+                        </MudTooltip>
+                    </div>
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)" Class="mb-4">
+                        App ID: @_runningGame.AppId
+                    </MudText>
+
+                    <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
+                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="mr-1" />
+                        Idle Time
+                    </MudText>
+                    <div class="d-flex align-center gap-3 mb-1">
+                        <MudText Typo="Typo.h6" Style="color:#66c0f4;font-weight:700;min-width:80px">
+                            @($"{_runRemainingH:F1}h") <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
+                        </MudText>
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
+                            @($"{_runPlayedH:F1}h") / @($"{_runRefH:F1}h")
+                        </MudText>
+                    </div>
+                    <MudProgressLinear Color="Color.Primary" Value="@_runIdlePct" Rounded="true" Size="Size.Medium" Class="mb-4" />
+
+                    @if (_runAchTotal > 0)
+                    {
+                        <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
+                            <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Class="mr-1" />
+                            Achievements
+                        </MudText>
+                        <div class="d-flex align-center gap-3 mb-1">
+                            <MudText Typo="Typo.h6" Style="color:#ffd700;font-weight:700;min-width:80px">
+                                @(_runAchTotal - _runAchDone) <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
+                            </MudText>
+                            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
+                                @_runAchDone / @_runAchTotal unlocked
+                            </MudText>
+                        </div>
+                        <MudProgressLinear Color="Color.Warning" Value="@_runAchPct" Rounded="true" Size="Size.Medium" Class="mb-4" />
+
+                        @if (_nextAchName != null)
+                        {
+                            <MudDivider Class="mb-3" Style="opacity:0.2" />
+                            <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-1" />
+                                Next Achievement
+                            </MudText>
+                            <div class="d-flex align-center gap-3">
+                                @if (!string.IsNullOrEmpty(_nextAchIcon))
+                                {
+                                    <img src="@_nextAchIcon" style="width:40px;height:40px;border-radius:4px;flex-shrink:0;opacity:0.6" />
+                                }
+                                <div>
+                                    <MudText Typo="Typo.body1" Style="font-weight:600">@_nextAchName</MudText>
+                                    <MudText Typo="Typo.caption" Style="color:#66c0f4">
+                                        in @FormatMinutes(_minutesUntilNextAch)
+                                    </MudText>
+                                </div>
+                            </div>
+                            @if (_upcomingAchs.Count > 0)
+                            {
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
+                                    @foreach (var ach in _upcomingAchs)
+                                    {
+                                        <MudTooltip Text="@ach.Name" Arrow="true" Placement="Placement.Top">
+                                            <img src="@(ach.Icon ?? "")" width="32" height="32"
+                                                 style="border-radius:4px;opacity:0.45;cursor:default"
+                                                 onerror="this.style.display='none'" />
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            }
+                        }
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    }
 }
 
 @code {
@@ -191,6 +288,10 @@ else
     List<UpcomingAch> _upcomingAchs = [];
     bool _stopping;
 
+    // Queue
+    private List<QueueEntry> _queue = [];
+    private bool _queueLoading = true;
+
     record UpcomingAch(string Name, string? Icon);
 
     protected override async Task OnInitializedAsync()
@@ -198,6 +299,11 @@ else
         IdleService.ProgressUpdated += OnProgress;
         _games = await Db.Games.Include(g => g.Achievements).ToListAsync();
         ComputeStats();
+
+        _queue = await QueueService.GetQueueAsync();
+        _queueLoading = false;
+        Notifier.GameCompleted += OnGameCompleted;
+
         _ = RunTimerAsync();
     }
 
@@ -210,6 +316,7 @@ else
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             _games = await db.Games.Include(g => g.Achievements).AsNoTracking().ToListAsync();
             ComputeStats();
+            _queue = await QueueService.GetQueueAsync();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -322,6 +429,53 @@ else
         }
     }
 
+    private async Task StartQueue()
+    {
+        await QueueService.StartQueueAsync();
+        _queue = await QueueService.GetQueueAsync();
+        StateHasChanged();
+    }
+
+    private async Task RemoveFromQueue(int gameId)
+    {
+        await QueueService.RemoveFromQueueAsync(gameId);
+        _queue = await QueueService.GetQueueAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnQueueItemDropped(MudItemDropInfo<QueueEntry> drop)
+    {
+        if (drop.Item == null) return;
+        await QueueService.ReorderAsync(drop.Item.GameId, drop.IndexInZone);
+        _queue = await QueueService.GetQueueAsync();
+        StateHasChanged();
+    }
+
+    private static Color GetQueueStatusColor(GameStatus status) => status switch
+    {
+        GameStatus.Playing   => Color.Info,
+        GameStatus.Scheduled => Color.Primary,
+        _                    => Color.Default,
+    };
+
+    private static string GetQueueRowBorderStyle(GameStatus status) => status switch
+    {
+        GameStatus.Playing   => "border-left:3px solid #66C0F4;",
+        GameStatus.Scheduled => "border-left:3px solid #3B82F6;",
+        _                    => "",
+    };
+
+    private void OnGameCompleted(CompletedGameInfo info)
+    {
+        InvokeAsync(() => {
+            Snackbar.Add(
+                $"Completed — {info.GameName}: all {info.AchievementCount} achievements unlocked",
+                Severity.Success,
+                cfg => { cfg.VisibleStateDuration = 8000; });
+            StateHasChanged();
+        });
+    }
+
     static string FormatMinutes(int minutes)
     {
         if (minutes <= 0) return "now";
@@ -334,6 +488,7 @@ else
     public void Dispose()
     {
         IdleService.ProgressUpdated -= OnProgress;
+        Notifier.GameCompleted -= OnGameCompleted;
         _timer?.Dispose();
     }
 }
