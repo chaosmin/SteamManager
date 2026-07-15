@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject AchievementHandler AchHandler
 @inject IGameIdleService IdleService
+@inject IGameRefreshService RefreshService
 @inject ISnackbar Snackbar
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
@@ -50,7 +51,7 @@ else
             </MudButton>
         </div>
     </div>
-    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-2">
+    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
         App ID: @_game.AppId &nbsp;|&nbsp;
         Idle time: @($"{_game.SteamPlaytimeAtRefresh / 60.0:F1}h") / @(_game.TargetMinutes.HasValue ? $"{_game.TargetMinutes.Value / 60.0:F2}h" : "10h")
         @if (_total > 0)
@@ -63,34 +64,51 @@ else
         }
     </MudText>
 
-    <div class="d-flex align-center gap-2 mb-4" style="flex-wrap:wrap">
-        @if (_editingUrl)
-        {
-            <MudTextField @bind-Value="_referenceUrl" Placeholder="https://steamhunter.com/app/..."
-                          Style="min-width:320px" Margin="Margin.Dense" Variant="Variant.Outlined"
+    <!-- Reference Player Panel -->
+    <MudExpansionPanel @bind-IsExpanded="_playerPanelExpanded" Dense="true" Class="mb-4">
+        <TitleContent>
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                <MudText Typo="Typo.body2">Reference Player</MudText>
+                @if (_hasPlayer)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                             Style="color:#22C55E;font-size:8px" />
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.5)">@_playerUrlShort</MudText>
+                }
+            </div>
+        </TitleContent>
+        <ChildContent>
+            @if (!_hasPlayer)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    No reference player configured. Add a SteamHunters player URL to enable scheduled unlocking.
+                </MudAlert>
+            }
+            @if (_playerError != null)
+            {
+                <MudAlert Severity="@(_playerError.Contains("Burst") ? Severity.Warning : Severity.Error)"
+                          Dense="true" Class="mb-3">@_playerError</MudAlert>
+            }
+            <MudTextField @bind-Value="_playerUrl" Label="SteamHunters Player URL"
+                          Variant="Variant.Outlined" FullWidth="true" Class="mb-3"
+                          Placeholder="https://steamhunters.com/profiles/76561198012345678"
                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link" />
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                       OnClick="SaveReferenceUrlAsync">Save</MudButton>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       OnClick="@(() => { _editingUrl = false; _referenceUrl = _game.ReferencePlayer?.PlayerUrl; })">Cancel</MudButton>
-        }
-        else if (!string.IsNullOrWhiteSpace(_game.ReferencePlayer?.PlayerUrl))
-        {
-            <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" Style="color:rgba(255,255,255,0.45)" />
-            <MudLink Href="@_game.ReferencePlayer!.PlayerUrl" Target="_blank" Typo="Typo.body2"
-                     Style="color:#66c0f4;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                @_game.ReferencePlayer!.PlayerUrl
-            </MudLink>
-            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                           OnClick="@(() => _editingUrl = true)" Title="Edit reference URL" />
-        }
-        else
-        {
-            <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.AddLink"
-                       Style="color:rgba(255,255,255,0.4)"
-                       OnClick="@(() => _editingUrl = true)">Set reference URL</MudButton>
-        }
-    </div>
+            <MudCheckBox @bind-Value="_overrideBurst" Dense="true" Class="mb-3"
+                         Label="Override burst detection" />
+            <div class="d-flex gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePlayer">Save</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                           Disabled="@(!_hasPlayer)" OnClick="RefreshGame">Refresh</MudButton>
+                @if (_hasPlayer)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemovePlayer">
+                        Remove Player
+                    </MudButton>
+                }
+            </div>
+        </ChildContent>
+    </MudExpansionPanel>
 
     @if (_loading)
     {
@@ -117,11 +135,12 @@ else
                 <MudTh Style="width:56px"></MudTh>
                 <MudTh>Achievement</MudTh>
                 <MudTh Style="width:120px">Global %</MudTh>
-                <MudTh>Status</MudTh>
-                <MudTh>Scheduled At</MudTh>
-                <MudTh>Unlocked At</MudTh>
+                <MudTh Style="width:150px">Scheduled At</MudTh>
+                <MudTh Style="width:110px">Status</MudTh>
+                <MudTh Style="width:120px">Time</MudTh>
             </HeaderContent>
             <RowTemplate>
+                <MudTr Class="@GetAchRowClass(context)">
                 <MudTd>
                     @{
                         var icon = context.IsUnlocked ? context.IconUrl : context.IconGrayUrl;
@@ -147,53 +166,67 @@ else
                         <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">@($"{context.GlobalPercent:F1}%")</MudText>
                     </div>
                 </MudTd>
-                <MudTd>
-                    @if (context.IsUnlocked)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Unlocked</MudChip>
-                    }
-                    else
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default">Locked</MudChip>
-                    }
+
+                @* Scheduled At *@
+                <MudTd Style="color:rgba(255,255,255,0.55);font-size:0.8rem">
+                    @(context.ScheduledUnlockAt.HasValue
+                        ? context.ScheduledUnlockAt.Value.ToLocalTime().ToString("MM-dd HH:mm")
+                        : "—")
                 </MudTd>
+
+                @* Status chip *@
                 <MudTd>
-                    @if (context.ScheduledUnlockAt.HasValue)
-                    {
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">
-                            @FormatTime(context.ScheduledUnlockAt.Value)
-                        </MudText>
+                    @{
+                        var (chipLabel, chipHex) = context.IsUnlocked ? ("Unlocked", "#22C55E")
+                            : context.ScheduledUnlockAt.HasValue ? ("Scheduled", "#3B82F6")
+                            : ("Locked", "#6B7280");
                     }
-                    else
-                    {
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.3)">—</MudText>
-                    }
+                    <MudChip T="string" Size="Size.Small" Style="@($"background:{chipHex};color:#fff")">@chipLabel</MudChip>
                 </MudTd>
+
+                @* Time *@
                 <MudTd>
                     @if (context.IsUnlocked && context.UnlockedAt.HasValue)
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Success">
-                            @FormatTime(context.UnlockedAt.Value)
-                        </MudText>
+                        <span style="color:#22C55E;font-size:0.8rem">
+                            @context.UnlockedAt.Value.ToLocalTime().ToString("MM-dd HH:mm")
+                        </span>
                     }
-                    else if (!context.IsUnlocked && context.ScheduledUnlockAt.HasValue)
+                    else if (context.ScheduledUnlockAt.HasValue)
                     {
-                        @if (context.ScheduledUnlockAt.Value <= DateTime.UtcNow)
+                        var rem = context.ScheduledUnlockAt.Value - DateTime.UtcNow;
+                        @if (rem > TimeSpan.Zero)
                         {
-                            <MudText Typo="Typo.caption" Color="Color.Warning">Pending unlock</MudText>
+                            <span style="color:#3B82F6;font-size:0.8rem">
+                                in @((int)rem.TotalHours)h @(rem.Minutes)m
+                            </span>
                         }
                         else
                         {
-                            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">
-                                in @($"{(context.ScheduledUnlockAt.Value - DateTime.UtcNow).TotalHours:F1}h")
-                            </MudText>
+                            <span style="color:#F59E0B;font-size:0.8rem">
+                                Pending <span class="pending-dot"
+                                    style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#F59E0B"></span>
+                            </span>
                         }
                     }
+                    else
+                    {
+                        <span style="color:rgba(255,255,255,0.3)">—</span>
+                    }
                 </MudTd>
+                </MudTr>
             </RowTemplate>
         </MudTable>
     }
 }
+
+<style>
+    .row-unlocked { opacity: 0.55; }
+    .row-next { border-left: 3px solid #3B82F6; background: rgba(59,130,246,0.05); }
+    .row-pending { border-left: 3px solid #F59E0B; background: rgba(245,158,11,0.04); }
+    @@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .pending-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+</style>
 
 @code {
     [Parameter] public int Id { get; set; }
@@ -205,8 +238,14 @@ else
     bool _forceReplaying;
     string? _loadError;
     string _timezone = "UTC";
-    string? _referenceUrl;
-    bool _editingUrl;
+
+    // Reference player state
+    private bool _hasPlayer;
+    private string _playerUrl = "";
+    private string _playerUrlShort = "";
+    private bool _overrideBurst;
+    private bool _playerPanelExpanded;
+    private string? _playerError;
 
     private List<BreadcrumbItem> _breadcrumbs =
     [
@@ -226,12 +265,67 @@ else
 
         if (_game == null) return;
         _breadcrumbs[1] = new(_game.NameI18n ?? _game.Name, href: null, disabled: true);
-        _referenceUrl = _game.ReferencePlayer?.PlayerUrl;
+
+        await LoadReferencePlayerAsync();
 
         if (_game.Achievements.Count == 0)
             await RefreshAchievementsAsync();
         else
             UpdateCounts();
+    }
+
+    private async Task LoadReferencePlayerAsync()
+    {
+        var refPlayer = await Db.GameReferencePlayers
+            .FirstOrDefaultAsync(r => r.GameId == _game!.Id);
+        _hasPlayer = refPlayer != null;
+        if (refPlayer != null)
+        {
+            _playerUrl = refPlayer.PlayerUrl;
+            _playerUrlShort = _playerUrl.Length > 50 ? _playerUrl[..50] + "…" : _playerUrl;
+            _overrideBurst = refPlayer.OverrideBurstCheck;
+        }
+    }
+
+    private async Task SavePlayer()
+    {
+        if (string.IsNullOrWhiteSpace(_playerUrl)) return;
+        var refPlayer = await Db.GameReferencePlayers.FirstOrDefaultAsync(r => r.GameId == _game!.Id);
+        if (refPlayer == null)
+            Db.GameReferencePlayers.Add(new GameReferencePlayer
+                { GameId = _game!.Id, PlayerUrl = _playerUrl.Trim(), OverrideBurstCheck = _overrideBurst });
+        else
+            { refPlayer.PlayerUrl = _playerUrl.Trim(); refPlayer.OverrideBurstCheck = _overrideBurst; }
+        await Db.SaveChangesAsync();
+        await LoadReferencePlayerAsync();
+        Snackbar.Add("Reference player saved.", Severity.Success);
+    }
+
+    private async Task RemovePlayer()
+    {
+        var refPlayer = await Db.GameReferencePlayers.FirstOrDefaultAsync(r => r.GameId == _game!.Id);
+        if (refPlayer != null) { Db.GameReferencePlayers.Remove(refPlayer); await Db.SaveChangesAsync(); }
+        _hasPlayer = false; _playerUrl = ""; _playerUrlShort = "";
+    }
+
+    private async Task RefreshGame()
+    {
+        _playerError = null;
+        try
+        {
+            await RefreshService.RefreshAsync(_game!.Id, _game.AppId);
+            await RefreshAchievementsAsync();
+            Snackbar.Add("Refresh complete.", Severity.Success);
+        }
+        catch (Exception ex) { _playerError = ex.Message; StateHasChanged(); }
+    }
+
+    private static string GetAchRowClass(Achievement ach)
+    {
+        if (ach.IsUnlocked) return "row-unlocked";
+        if (ach.ScheduledUnlockAt.HasValue && ach.ScheduledUnlockAt.Value > DateTime.UtcNow) return "row-next";
+        if (ach.ScheduledUnlockAt.HasValue) return "row-pending";
+        return "";
     }
 
     async Task RefreshAchievementsAsync()
@@ -301,14 +395,6 @@ else
             _forceReplaying = false;
             StateHasChanged();
         }
-    }
-
-    async Task SaveReferenceUrlAsync()
-    {
-        // TODO Task 12: persist to GameReferencePlayer table
-        _editingUrl = false;
-        await Task.CompletedTask;
-        Snackbar.Add("Reference player URL (save not yet implemented — coming in Task 12)", Severity.Info);
     }
 
     void UpdateCounts()
