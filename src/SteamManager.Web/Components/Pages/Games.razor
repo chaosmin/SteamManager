@@ -2,6 +2,8 @@
 @rendermode InteractiveServer
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
+@inject IGameQueueService QueueService
+@inject IGameRefreshService RefreshService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject ISteamSessionService Session
@@ -127,6 +129,8 @@ else
                     var stats = _achStats.GetValueOrDefault(game.Id);
                     var achTotal = stats?.Total ?? 0;
                     var achDone = stats?.Unlocked ?? 0;
+                    var queuePos = GetQueuePosition(game.Id);
+                    var hasRefPlayer = game.ReferencePlayer != null;
 
                     var refMinutes = game.TargetMinutes is > 0 ? game.TargetMinutes.Value : 600;
 
@@ -155,9 +159,22 @@ else
                     <MudItem xs="12" sm="6" md="4" lg="3">
                         <MudCard Elevation="3" Class="game-card" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
                             <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
-                                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
-                                     style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
-                                     onerror="this.src=''" />
+                                @if (queuePos.HasValue && game.Status == GameStatus.Idle)
+                                {
+                                    <MudBadge Content="@((queuePos.Value + 1).ToString())"
+                                              Overlap="true" Bordered="true"
+                                              Color="Color.Info">
+                                        <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
+                                             style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
+                                             onerror="this.src=''" />
+                                    </MudBadge>
+                                }
+                                else
+                                {
+                                    <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
+                                         style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
+                                         onerror="this.src=''" />
+                                }
                                 <div style="position:absolute;top:6px;right:6px">
                                     <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
                                              Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
@@ -209,15 +226,35 @@ else
                                     <MudIconButton Icon="@Icons.Material.Filled.Info" Color="Color.Info" Size="Size.Small"
                                                    OnClick="@(() => Nav.NavigateTo($"/games/{game.Id}"))" />
                                 }
-                                @if (game.Status == GameStatus.Idle || game.Status == GameStatus.Completed)
+                                @if (game.Status == GameStatus.Playing)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" Size="Size.Small"
-                                                   OnClick="@(() => StartGame(game.AppId))" />
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                               OnClick="@(() => StopGame(game.AppId))">Stop</MudButton>
                                 }
-                                else if (game.Status == GameStatus.Playing)
+                                else if (game.Status == GameStatus.Scheduled)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
-                                                   OnClick="@(() => StopGame(game.AppId))" />
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">Scheduled</MudChip>
+                                }
+                                else if (game.Status == GameStatus.Completed)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                                               OnClick="@(() => ForceRefreshGame(game.Id, game.AppId))">Force Refresh</MudButton>
+                                }
+                                else if (queuePos.HasValue)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="@(() => RefreshGame(game.Id, game.AppId))">Re-Refresh</MudButton>
+                                }
+                                else if (!hasRefPlayer)
+                                {
+                                    <MudTooltip Text="Configure a reference player in game detail first">
+                                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="true">Refresh</MudButton>
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                               OnClick="@(() => RefreshGame(game.Id, game.AppId))">Refresh</MudButton>
                                 }
                                 <MudSpacer />
                                 @if (_serverValidatedAppIds.Contains(game.AppId))
@@ -241,6 +278,7 @@ else
     enum SortOption { NameAsc, NameDesc, PlaytimeAsc, PlaytimeDesc, AchAsc, AchDesc }
 
     List<Game> _games = [];
+    List<QueueEntry> _queue = [];
     Dictionary<int, AchievementStats> _achStats = [];
     HashSet<int> _serverValidatedAppIds = [];
     bool _loading = true;
@@ -266,7 +304,11 @@ else
 
     async Task RefreshAsync()
     {
-        _games = await Db.Games.AsNoTracking().ToListAsync();
+        _games = await Db.Games
+            .Include(g => g.ReferencePlayer)
+            .AsNoTracking()
+            .ToListAsync();
+        _queue = await QueueService.GetQueueAsync();
         var raw = await Db.Achievements
             .AsNoTracking()
             .GroupBy(a => a.GameId)
@@ -285,6 +327,33 @@ else
             .ToListAsync();
         _serverValidatedAppIds = failedAppIds.ToHashSet();
         _loading = false;
+    }
+
+    int? GetQueuePosition(int gameId)
+        => _queue.FirstOrDefault(q => q.GameId == gameId)?.Position;
+
+    async Task RefreshGame(int gameId, int appId)
+    {
+        try
+        {
+            await RefreshService.RefreshAsync(gameId, appId);
+            _queue = await QueueService.GetQueueAsync();
+            await RefreshAsync();
+            Snackbar.Add("Refresh complete — game added to queue.", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    async Task ForceRefreshGame(int gameId, int appId)
+    {
+        try
+        {
+            await RefreshService.ForceRefreshAsync(gameId, appId);
+            _queue = await QueueService.GetQueueAsync();
+            await RefreshAsync();
+            Snackbar.Add("Force refresh complete.", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
     }
 
     async Task StartGame(int appId)
@@ -308,6 +377,7 @@ else
     async Task StopGame(int appId)
     {
         await IdleService.StopAsync(appId);
+        _queue = await QueueService.GetQueueAsync();
         await RefreshAsync();
         Snackbar.Add("Game stopped", Severity.Info);
     }
