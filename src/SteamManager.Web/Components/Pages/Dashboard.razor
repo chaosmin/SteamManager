@@ -72,12 +72,20 @@ else
     <MudPaper Class="pa-4 mb-4" Style="background:rgba(255,255,255,0.03);" Elevation="0">
         <div class="d-flex align-center justify-space-between mb-3">
             <MudText Typo="Typo.h6">Queue</MudText>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.PlayArrow"
-                       Disabled="@(!_queue.Any(q => q.Status == GameStatus.Idle))"
-                       OnClick="StartQueue">
-                Start Queue
-            </MudButton>
+            <div class="d-flex gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                           Disabled="@(_queue.Count(q => q.Status == GameStatus.Playing) >= _maxSlots || !_queue.Any(q => q.Status == GameStatus.Idle))"
+                           OnClick="StartQueue">
+                    Start Queue
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.Stop"
+                           Disabled="@(!_queue.Any(q => q.Status == GameStatus.Playing))"
+                           OnClick="StopQueue">
+                    Stop
+                </MudButton>
+            </div>
         </div>
 
         @if (_queueLoading)
@@ -96,176 +104,95 @@ else
             <MudDropContainer T="QueueEntry" Items="_queue" ItemDropped="OnQueueItemDropped"
                               ItemsSelector="@((item, _) => true)">
                 <ChildContent>
-                    <MudDropZone T="QueueEntry" Identifier="queue" Class="d-flex flex-column gap-1">
-                        @foreach (var item in _queue)
-                        {
-                            <MudPaper Elevation="0" Class="d-flex align-center gap-3 pa-2"
-                                      Style="@($"border-radius:6px;background:rgba(255,255,255,0.04);{GetQueueRowBorderStyle(item.Status)}")">
-                                <MudIcon Icon="@Icons.Material.Filled.DragIndicator"
-                                         Style="@(item.Status == GameStatus.Idle
-                                             ? "color:rgba(255,255,255,0.3);cursor:grab"
-                                             : "color:rgba(255,255,255,0.1);cursor:default")" />
-                                <MudImage Src="@item.HeaderUrl" Width="48" Height="22"
-                                          ObjectFit="ObjectFit.Cover" Style="border-radius:3px" />
-                                <MudText Typo="Typo.body2" Class="flex-grow-1">
-                                    @(item.NameI18n ?? item.Name)
-                                </MudText>
-                                <MudChip T="string" Size="Size.Small"
-                                         Color="@GetQueueStatusColor(item.Status)">
-                                    @item.Status.ToString()
-                                </MudChip>
-                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                                               Disabled="@(item.Status != GameStatus.Idle)"
-                                               OnClick="@(() => RemoveFromQueue(item.GameId))" />
-                            </MudPaper>
-                        }
-                    </MudDropZone>
+                    <MudDropZone T="QueueEntry" Identifier="queue" Class="d-flex flex-column gap-1" />
                 </ChildContent>
+                <ItemRenderer>
+                    <MudPaper Elevation="0" Class="d-flex align-center gap-3 pa-2"
+                              Style="@($"border-radius:6px;background:rgba(255,255,255,0.04);{GetQueueRowBorderStyle(context.Status)}")">
+                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator"
+                                 Style="@(context.Status == GameStatus.Idle
+                                     ? "color:rgba(255,255,255,0.3);cursor:grab"
+                                     : "color:rgba(255,255,255,0.1);cursor:default")" />
+                        <MudImage Src="@context.HeaderUrl" Width="48" Height="22"
+                                  ObjectFit="ObjectFit.Cover" Style="border-radius:3px" />
+                        <MudText Typo="Typo.body2" Class="flex-grow-1">
+                            @(context.NameI18n ?? context.Name)
+                        </MudText>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@GetQueueStatusColor(context.Status)">
+                            @context.Status.ToString()
+                        </MudChip>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                       Disabled="@(context.Status != GameStatus.Idle)"
+                                       OnClick="@(() => RemoveFromQueue(context.GameId))" />
+                    </MudPaper>
+                </ItemRenderer>
             </MudDropContainer>
         }
     </MudPaper>
 
-    @* ── Playing + Scheduled Cards ── *@
-    @if (_queue.Any(q => q.Status == GameStatus.Playing))
+    @* ── Queue Progress Panel ── *@
+    @if (_hasQueueGames)
     {
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px">
-            @foreach (var item in _queue.Where(q => q.Status == GameStatus.Playing))
-            {
-                <MudCard Style="background:rgba(255,255,255,0.04)">
-                    <MudCardMedia Image="@item.HeaderUrl" Height="110" />
-                    <MudCardContent>
-                        <div class="d-flex align-center justify-space-between mb-1">
-                            <MudText Typo="Typo.h6">@(item.NameI18n ?? item.Name)</MudText>
-                            <MudChip T="string" Size="Size.Small" Color="Color.Info">Playing</MudChip>
-                        </div>
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)">
-                            Idling…
-                        </MudText>
-                    </MudCardContent>
-                    <MudCardActions>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                   OnClick="@(() => RemoveFromQueue(item.GameId))">Stop</MudButton>
-                    </MudCardActions>
-                </MudCard>
-            }
-        </div>
-    }
+        <MudPaper Elevation="3" Class="mt-4 pa-4" Style="border-radius:12px">
+            <MudText Typo="Typo.subtitle1" Style="font-weight:600;color:rgba(255,255,255,0.75)" Class="mb-3">Queue Progress</MudText>
 
-    @if (_queue.Any(q => q.Status == GameStatus.Scheduled))
-    {
-        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)" Class="mb-2">Scheduled</MudText>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px">
-            @foreach (var item in _queue.Where(q => q.Status == GameStatus.Scheduled))
-            {
-                <MudCard Style="background:rgba(255,255,255,0.03);border-left:3px solid #3B82F6">
-                    <MudCardContent>
-                        <div class="d-flex align-center justify-space-between">
-                            <MudText Typo="Typo.body1">@(item.NameI18n ?? item.Name)</MudText>
-                            <MudChip T="string" Size="Size.Small" Color="Color.Primary">Scheduled</MudChip>
-                        </div>
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.45)" Class="mt-1">
-                            Playtime goal reached · achievements still unlocking
-                        </MudText>
-                    </MudCardContent>
-                </MudCard>
-            }
-        </div>
-    }
-
-    @* ── Legacy currently-running game detail (when idled via old direct-start path) ── *@
-    @if (_runningGame != null)
-    {
-        <MudPaper Elevation="4" Class="mt-4" Style="border-radius:12px;overflow:hidden">
-            <div style="display:flex;align-items:stretch;flex-wrap:wrap">
-                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(_runningGame.AppId)/library_600x900.jpg"
-                     style="width:340px;object-fit:cover;flex-shrink:0;align-self:stretch"
-                     onerror="this.style.display='none'" />
-                <div style="flex:1;padding:24px;min-width:220px">
-                    <div class="d-flex align-center justify-space-between mb-1">
-                        <div class="d-flex align-center" style="gap:8px;flex:1;min-width:0">
-                            <MudChip T="string" Color="Color.Success" Size="Size.Small">Running</MudChip>
-                            <MudText Typo="Typo.h5" Style="font-weight:700;cursor:pointer;text-decoration:underline dotted rgba(255,255,255,0.4)"
-                                     @onclick="@(() => Nav.NavigateTo($"/games/{_runningGame!.Id}"))">
-                                @(_runningGame.NameI18n ?? _runningGame.Name)
-                            </MudText>
-                        </div>
-                        <MudTooltip Text="Stop game">
-                            <MudIconButton Icon="@Icons.Material.Filled.StopCircle"
-                                           Color="Color.Error" Size="Size.Medium"
-                                           Disabled="_stopping"
-                                           OnClick="StopCurrentGameAsync" />
-                        </MudTooltip>
-                    </div>
-                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)" Class="mb-4">
-                        App ID: @_runningGame.AppId
-                    </MudText>
-
-                    <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
-                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="mr-1" />
-                        Idle Time
-                    </MudText>
-                    <div class="d-flex align-center gap-3 mb-1">
-                        <MudText Typo="Typo.h6" Style="color:#66c0f4;font-weight:700;min-width:80px">
-                            @($"{_runRemainingH:F1}h") <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
-                        </MudText>
-                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
-                            @($"{_runPlayedH:F1}h") / @($"{_runRefH:F1}h")
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@_runIdlePct" Rounded="true" Size="Size.Medium" Class="mb-4" />
-
-                    @if (_runAchTotal > 0)
-                    {
-                        <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-1">
-                            <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Class="mr-1" />
-                            Achievements
-                        </MudText>
-                        <div class="d-flex align-center gap-3 mb-1">
-                            <MudText Typo="Typo.h6" Style="color:#ffd700;font-weight:700;min-width:80px">
-                                @(_runAchTotal - _runAchDone) <span style="font-size:0.8rem;color:rgba(255,255,255,0.4)">left</span>
-                            </MudText>
-                            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)">
-                                @_runAchDone / @_runAchTotal unlocked
-                            </MudText>
-                        </div>
-                        <MudProgressLinear Color="Color.Warning" Value="@_runAchPct" Rounded="true" Size="Size.Medium" Class="mb-4" />
-
-                        @if (_nextAchName != null)
-                        {
-                            <MudDivider Class="mb-3" Style="opacity:0.2" />
-                            <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-2">
-                                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-1" />
-                                Next Achievement
-                            </MudText>
-                            <div class="d-flex align-center gap-3">
-                                @if (!string.IsNullOrEmpty(_nextAchIcon))
-                                {
-                                    <img src="@_nextAchIcon" style="width:40px;height:40px;border-radius:4px;flex-shrink:0;opacity:0.6" />
-                                }
-                                <div>
-                                    <MudText Typo="Typo.body1" Style="font-weight:600">@_nextAchName</MudText>
-                                    <MudText Typo="Typo.caption" Style="color:#66c0f4">
-                                        in @FormatMinutes(_minutesUntilNextAch)
-                                    </MudText>
-                                </div>
-                            </div>
-                            @if (_upcomingAchs.Count > 0)
-                            {
-                                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
-                                    @foreach (var ach in _upcomingAchs)
-                                    {
-                                        <MudTooltip Text="@ach.Name" Arrow="true" Placement="Placement.Top">
-                                            <img src="@(ach.Icon ?? "")" width="32" height="32"
-                                                 style="border-radius:4px;opacity:0.45;cursor:default"
-                                                 onerror="this.style.display='none'" />
-                                        </MudTooltip>
-                                    }
-                                </div>
-                            }
-                        }
-                    }
-                </div>
+            <div class="d-flex align-center gap-2 mb-1">
+                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Color="Color.Primary" />
+                <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)">Idle Time</MudText>
+                <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)" Class="ml-1">
+                    @($"{_queuePlayedH:F1}h") / @($"{_queueRefH:F1}h")
+                </MudText>
             </div>
+            <MudProgressLinear Color="Color.Primary" Value="@_queueIdlePct" Rounded="true" Size="Size.Medium" Class="mb-3" />
+
+            @if (_queueAchTotal > 0)
+            {
+                <div class="d-flex align-center gap-2 mb-1">
+                    <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Color="Color.Warning" />
+                    <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)">Achievements</MudText>
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.55)" Class="ml-1">
+                        @_queueAchDone / @_queueAchTotal unlocked
+                    </MudText>
+                </div>
+                <MudProgressLinear Color="Color.Warning" Value="@_queueAchPct" Rounded="true" Size="Size.Medium" Class="mb-3" />
+            }
+
+            @if (_upcomingAchs.Any())
+            {
+                <MudDivider Class="mb-3" Style="opacity:0.2" />
+                <MudText Typo="Typo.subtitle2" Style="color:rgba(255,255,255,0.75)" Class="mb-2">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-1" />
+                    Next Achievements
+                </MudText>
+                <div class="d-flex align-center gap-3 mb-3">
+                    @if (!string.IsNullOrEmpty(_upcomingAchs[0].Icon))
+                    {
+                        <img src="@_upcomingAchs[0].Icon" style="width:40px;height:40px;border-radius:4px;flex-shrink:0;opacity:0.6" />
+                    }
+                    <div>
+                        <MudText Typo="Typo.body1" Style="font-weight:600">@_upcomingAchs[0].Name</MudText>
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.5)">@_upcomingAchs[0].GameName</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#66c0f4">
+                            @(_upcomingAchs[0].MinutesUntil > 0 ? $"in {FormatMinutes(_upcomingAchs[0].MinutesUntil)}" : "Pending")
+                        </MudText>
+                    </div>
+                </div>
+                @if (_upcomingAchs.Count > 1)
+                {
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                        @foreach (var ach in _upcomingAchs.Skip(1).Take(20))
+                        {
+                            <MudTooltip Text="@($"{ach.Name} · {ach.GameName} · {(ach.MinutesUntil > 0 ? FormatMinutes(ach.MinutesUntil) : "Pending")}")"
+                                        Arrow="true" Placement="Placement.Top">
+                                <img src="@(ach.Icon ?? "")" width="32" height="32"
+                                     style="border-radius:4px;opacity:0.45;cursor:default"
+                                     onerror="this.style.display='none'" />
+                            </MudTooltip>
+                        }
+                    </div>
+                }
+            }
         </MudPaper>
     }
 }
@@ -279,31 +206,32 @@ else
     int _totalRemainingAch, _totalUnlockedAch, _totalAch, _gamesWithAch;
     double _achProgressPct;
 
-    // Running game stats
-    Game? _runningGame;
-    double _runPlayedH, _runRemainingH, _runRefH, _runIdlePct, _runAchPct;
-    int _runAchTotal, _runAchDone;
-    string? _nextAchName, _nextAchIcon;
-    int _minutesUntilNextAch;
+    // Queue progress stats
+    double _queuePlayedH, _queueRemainingH, _queueRefH, _queueIdlePct;
+    int _queueAchTotal, _queueAchDone;
+    double _queueAchPct;
+    bool _hasQueueGames;
     List<UpcomingAch> _upcomingAchs = [];
-    bool _stopping;
 
     // Queue
     private List<QueueEntry> _queue = [];
     private bool _queueLoading = true;
+    private int _maxSlots = 1;
 
-    record UpcomingAch(string Name, string? Icon);
+    record UpcomingAch(string Name, string? Icon, string GameName, int MinutesUntil);
 
     protected override async Task OnInitializedAsync()
     {
         IdleService.ProgressUpdated += OnProgress;
         _games = await Db.Games.Include(g => g.Achievements).ToListAsync();
-        ComputeStats();
-
         _queue = await QueueService.GetQueueAsync();
         _queueLoading = false;
-        Notifier.GameCompleted += OnGameCompleted;
+        ComputeStats();
 
+        var cfg = await Db.SteamConfigs.AsNoTracking().FirstOrDefaultAsync();
+        _maxSlots = cfg?.MaxConcurrentGames ?? 1;
+
+        Notifier.GameCompleted += OnGameCompleted;
         _ = RunTimerAsync();
     }
 
@@ -315,18 +243,30 @@ else
             using var scope = ScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             _games = await db.Games.Include(g => g.Achievements).AsNoTracking().ToListAsync();
-            ComputeStats();
             _queue = await QueueService.GetQueueAsync();
+            var cfg = await db.Set<SteamManager.Core.Models.SteamConfig>().AsNoTracking().FirstOrDefaultAsync();
+            _maxSlots = cfg?.MaxConcurrentGames ?? 1;
+            ComputeStats();
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _games = await Db.Games.Include(g => g.Achievements).AsNoTracking().ToListAsync();
+        _queue = await QueueService.GetQueueAsync();
+        ComputeStats();
     }
 
     void ComputeStats()
     {
         int totalRemainingMinutes = 0, totalPlayedMinutes = 0, totalRefMinutes = 0;
         int totalAch = 0, totalUnlocked = 0, gamesWithAch = 0;
-        _runningGame = null;
-        _upcomingAchs = [];
+
+        int queuePlayedMinutes = 0, queueRemainingMinutes = 0, queueRefMinutes = 0;
+        int queueAchTotal = 0, queueAchDone = 0;
+        var queueGameIds = _queue.Select(q => q.GameId).ToHashSet();
+        var upcomingAchs = new List<UpcomingAch>();
 
         foreach (var game in _games)
         {
@@ -345,35 +285,23 @@ else
                 totalUnlocked += game.Achievements.Count(a => a.IsUnlocked);
             }
 
-            if (game.Status == GameStatus.Playing)
+            if (queueGameIds.Contains(game.Id))
             {
-                _runningGame = game;
                 var achDone = game.Achievements.Count(a => a.IsUnlocked);
-                _runAchTotal = achTotal;
-                _runAchDone = achDone;
-                _runPlayedH = playedMinutes / 60.0;
-                _runRemainingH = Math.Max(0, refMinutes - playedMinutes) / 60.0;
-                _runRefH = refMinutes / 60.0;
-                _runIdlePct = refMinutes > 0 ? Math.Min(100.0, playedMinutes * 100.0 / refMinutes) : 0;
-                _runAchPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
+                queuePlayedMinutes += playedMinutes;
+                queueRemainingMinutes += Math.Max(0, refMinutes - playedMinutes);
+                queueRefMinutes += refMinutes;
+                queueAchTotal += achTotal;
+                queueAchDone += achDone;
 
-                var nextAch = game.Achievements
+                var gameName = game.NameI18n ?? game.Name;
+                upcomingAchs.AddRange(game.Achievements
                     .Where(a => !a.IsUnlocked && a.ScheduledUnlockAt.HasValue)
-                    .OrderBy(a => a.ScheduledUnlockAt)
-                    .FirstOrDefault();
-                _nextAchName = nextAch != null ? (nextAch.DisplayNameI18n ?? nextAch.DisplayName) : null;
-                _nextAchIcon = nextAch?.IconUrl;
-                _minutesUntilNextAch = nextAch?.ScheduledUnlockAt.HasValue == true
-                    ? (int)Math.Max(0, (nextAch.ScheduledUnlockAt.Value - DateTime.UtcNow).TotalMinutes)
-                    : 0;
-                _upcomingAchs = game.Achievements
-                    .Where(a => !a.IsUnlocked && a.ScheduledUnlockAt.HasValue)
-                    .OrderBy(a => a.ScheduledUnlockAt)
-                    .Skip(1)
                     .Select(a => new UpcomingAch(
                         a.DisplayNameI18n ?? a.DisplayName,
-                        a.IconGrayUrl ?? a.IconUrl))
-                    .ToList();
+                        a.IconGrayUrl ?? a.IconUrl,
+                        gameName,
+                        (int)Math.Max(0, (a.ScheduledUnlockAt!.Value - DateTime.UtcNow).TotalMinutes))));
             }
         }
 
@@ -387,6 +315,16 @@ else
         _totalRemainingAch = totalAch - totalUnlocked;
         _gamesWithAch = gamesWithAch;
         _achProgressPct = totalAch > 0 ? totalUnlocked * 100.0 / totalAch : 0;
+
+        _hasQueueGames = _queue.Any();
+        _queuePlayedH = queuePlayedMinutes / 60.0;
+        _queueRemainingH = queueRemainingMinutes / 60.0;
+        _queueRefH = queueRefMinutes / 60.0;
+        _queueIdlePct = queueRefMinutes > 0 ? Math.Min(100, queuePlayedMinutes * 100.0 / queueRefMinutes) : 0;
+        _queueAchTotal = queueAchTotal;
+        _queueAchDone = queueAchDone;
+        _queueAchPct = queueAchTotal > 0 ? queueAchDone * 100.0 / queueAchTotal : 0;
+        _upcomingAchs = upcomingAchs.OrderBy(a => a.MinutesUntil).ToList();
     }
 
     void OnProgress(int appId, int minutes)
@@ -401,45 +339,26 @@ else
         }
     }
 
-    async Task StopCurrentGameAsync()
-    {
-        if (_runningGame == null) return;
-        _stopping = true;
-        StateHasChanged();
-        try
-        {
-            var appId = _runningGame.AppId;
-            await IdleService.StopAsync(appId);
-
-            using var scope = ScopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
-            if (game != null) game.Status = GameStatus.Idle;
-
-            await db.SaveChangesAsync();
-
-            _games = await db.Games.Include(g => g.Achievements).AsNoTracking().ToListAsync();
-            ComputeStats();
-        }
-        finally
-        {
-            _stopping = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
     private async Task StartQueue()
     {
         await QueueService.StartQueueAsync();
-        _queue = await QueueService.GetQueueAsync();
+        await ReloadAsync();
+        StateHasChanged();
+    }
+
+    private async Task StopQueue()
+    {
+        var playing = _queue.Where(q => q.Status == GameStatus.Playing).ToList();
+        foreach (var item in playing)
+            await QueueService.RemoveFromQueueAsync(item.GameId);
+        await ReloadAsync();
         StateHasChanged();
     }
 
     private async Task RemoveFromQueue(int gameId)
     {
         await QueueService.RemoveFromQueueAsync(gameId);
-        _queue = await QueueService.GetQueueAsync();
+        await ReloadAsync();
         StateHasChanged();
     }
 
@@ -448,7 +367,8 @@ else
         if (drop.Item == null) return;
         await QueueService.ReorderAsync(drop.Item.GameId, drop.IndexInZone);
         _queue = await QueueService.GetQueueAsync();
-        StateHasChanged();
+        ComputeStats();
+        await InvokeAsync(StateHasChanged);
     }
 
     private static Color GetQueueStatusColor(GameStatus status) => status switch

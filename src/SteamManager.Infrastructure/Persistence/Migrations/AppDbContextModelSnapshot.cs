@@ -338,6 +338,11 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("longtext")
                         .HasColumnName("language");
 
+                    b.Property<int>("MaxConcurrentGames")
+                        .HasColumnType("int")
+                        .HasDefaultValue(1)
+                        .HasColumnName("max_concurrent_games");
+
                     b.Property<string>("PasswordEnc")
                         .HasColumnType("longtext")
                         .HasColumnName("password_enc");

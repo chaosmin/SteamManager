@@ -48,22 +48,56 @@ public class StartupRecoveryService(
 
             game.SessionStartedAt = now;
 
-            // Re-anchor scheduled_unlock_at from server start (preserve relative intervals)
+            // Re-anchor scheduled_unlock_at from server start (preserve relative intervals).
+            // If schedule is still in the future, leave it untouched.
+            // If past-due, compute how much of the reference interval has already elapsed
+            // using the last unlocked achievement as the reference point.
             var pending = game.Achievements.Where(a => !a.IsUnlocked && a.ScheduledUnlockAt.HasValue).ToList();
             if (pending.Count > 0)
             {
                 var minScheduled = pending.Min(a => a.ScheduledUnlockAt!.Value);
-                foreach (var ach in pending)
+                if (minScheduled > now)
                 {
-                    var relOffset = ach.ScheduledUnlockAt!.Value - minScheduled;
-                    ach.ScheduledUnlockAt = now.Add(relOffset);
+                    // Schedule intact — nothing to do
+                    logger.LogInformation("Recovery: game {AppId} schedule intact, first achievement in {Min:F0} min",
+                        game.AppId, (minScheduled - now).TotalMinutes);
+                }
+                else
+                {
+                    // Schedule lapsed — compute remaining time from reference interval
+                    var lastUnlocked = game.Achievements
+                        .Where(a => a.IsUnlocked && a.UnlockedAt.HasValue)
+                        .OrderByDescending(a => a.UnlockedAt)
+                        .FirstOrDefault();
+
+                    TimeSpan anchorOffset = TimeSpan.Zero;
+                    if (lastUnlocked?.UnlockedAt != null)
+                    {
+                        var referenceInterval = minScheduled - lastUnlocked.UnlockedAt!.Value;
+                        var elapsed = now - lastUnlocked.UnlockedAt!.Value;
+                        var remaining = referenceInterval - elapsed;
+                        if (remaining > TimeSpan.Zero)
+                            anchorOffset = remaining;
+                        // else: elapsed >= referenceInterval → anchor = now (fire at next tick)
+                    }
+
+                    var anchor = now.Add(anchorOffset);
+                    foreach (var ach in pending)
+                    {
+                        var relOffset = ach.ScheduledUnlockAt!.Value - minScheduled;
+                        ach.ScheduledUnlockAt = anchor.Add(relOffset);
+                    }
+
+                    logger.LogInformation(
+                        "Recovery: game {AppId} re-anchored {Count} achievements, first fires in {Min:F0} min",
+                        game.AppId, pending.Count, anchorOffset.TotalMinutes);
                 }
             }
 
             await db.SaveChangesAsync(ct);
             await idle.StartAsync(game.AppId, ct);
 
-            logger.LogInformation("Recovery: game {AppId} resumed, {Count} achievements re-anchored",
+            logger.LogInformation("Recovery: game {AppId} resumed with {Count} pending achievements",
                 game.AppId, pending.Count);
         }
 

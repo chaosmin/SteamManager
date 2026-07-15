@@ -108,6 +108,18 @@
                 }
             </MudCardContent>
         </MudCard>
+        <MudCard Elevation="2" Class="mt-4">
+            <MudCardHeader>
+                <CardHeaderContent><MudText Typo="Typo.h6">Queue Settings</MudText></CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudNumericField @bind-Value="_maxConcurrentGames" Label="Max Concurrent Games"
+                                 Variant="Variant.Outlined" FullWidth="true" Class="mb-3"
+                                 Min="1" Max="32"
+                                 HelperText="How many games can idle simultaneously" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveQueueSettings">Save</MudButton>
+            </MudCardContent>
+        </MudCard>
     </MudItem>
 </MudGrid>
 
@@ -115,6 +127,7 @@
     string _username = "", _password = "", _twoFaCode = "", _apiKey = "";
     string _syncCron = "0 0 * * *";
     string? _cronError;
+    int _maxConcurrentGames = 1;
     bool _busy;
 
     protected override async Task OnInitializedAsync()
@@ -127,6 +140,7 @@
         {
             _apiKey = cfg.WebApiKey ?? "";
             _syncCron = cfg.SyncCron;
+            _maxConcurrentGames = cfg.MaxConcurrentGames;
         }
     }
 
@@ -179,6 +193,15 @@
         if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
         await Db.SaveChangesAsync();
         Snackbar.Add("Sync schedule saved", Severity.Success);
+    }
+
+    async Task SaveQueueSettings()
+    {
+        var cfg = await Db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamManager.Core.Models.SteamConfig();
+        cfg.MaxConcurrentGames = Math.Max(1, _maxConcurrentGames);
+        if (cfg.Id == 0) Db.SteamConfigs.Add(cfg);
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Queue settings saved", Severity.Success);
     }
 
     async Task SyncNow()

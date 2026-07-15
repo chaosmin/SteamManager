@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SteamManager.Core.Models;
 using SteamManager.Core.Services;
@@ -9,7 +10,7 @@ using SteamManager.Infrastructure.Persistence;
 namespace SteamManager.Infrastructure.Services;
 
 public partial class GameRefreshService(
-    AppDbContext db,
+    IServiceScopeFactory scopeFactory,
     SteamWebApiClient steamApi,
     SteamHuntersClient hunters,
     ISteamSessionService session,
@@ -19,11 +20,67 @@ public partial class GameRefreshService(
     public Task RefreshAsync(int gameId, int appId, CancellationToken ct = default)
         => RefreshCoreAsync(gameId, appId, forceReset: false, ct);
 
+    public async Task SyncAsync(int gameId, int appId, CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException("Steam config not found");
+        var apiKey = cfg.WebApiKey
+            ?? throw new InvalidOperationException("Steam Web API key not configured");
+
+        var game = await db.Games.FindAsync([gameId], ct)
+            ?? throw new InvalidOperationException($"Game {gameId} not found");
+
+        if (!session.SteamId64.HasValue)
+            throw new InvalidOperationException("Not logged in to Steam.");
+
+        // Fetch current playtime
+        var currentPlaytime = await steamApi.GetPlayerGamePlaytimeAsync(
+            (long)session.SteamId64.Value, appId, apiKey, ct);
+        if (currentPlaytime > 0)
+            game.SteamPlaytimeAtRefresh = currentPlaytime;
+
+        // Sync achievement unlock status from Steam
+        var myAchs = await steamApi.GetPlayerAchievementsAsync(
+            (long)session.SteamId64.Value, appId, apiKey, ct);
+        var myMap = myAchs.ToDictionary(a => a.ApiName);
+        var achievements = await db.Achievements.Where(a => a.GameId == gameId).ToListAsync(ct);
+        foreach (var row in achievements)
+        {
+            if (!row.IsUnlocked && myMap.TryGetValue(row.ApiName, out var p) && p.UnlockTime.HasValue)
+            {
+                row.IsUnlocked = true;
+                row.UnlockedAt = DateTimeOffset.FromUnixTimeSeconds(p.UnlockTime.Value).UtcDateTime;
+                row.ScheduledUnlockAt = null;
+            }
+        }
+
+        // Check completion: playtime goal met AND all achievements unlocked
+        var targetMet = game.TargetMinutes.HasValue && game.SteamPlaytimeAtRefresh >= game.TargetMinutes.Value;
+        var allUnlocked = achievements.Count > 0 && achievements.All(a => a.IsUnlocked);
+        if (targetMet && allUnlocked && game.Status != GameStatus.Completed)
+        {
+            game.Status = GameStatus.Completed;
+            await queue.RemoveFromQueueAsync(gameId);
+            logger.LogInformation("Sync: game {AppId} marked Completed", appId);
+        }
+
+        game.AchievementsCachedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Sync complete: game {GameId} ({AppId}), playtime={Pt}min",
+            gameId, appId, game.SteamPlaytimeAtRefresh);
+    }
+
     public Task ForceRefreshAsync(int gameId, int appId, CancellationToken ct = default)
         => RefreshCoreAsync(gameId, appId, forceReset: true, ct);
 
     private async Task RefreshCoreAsync(int gameId, int appId, bool forceReset, CancellationToken ct)
     {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
         // 1. Load config
         var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct)
             ?? throw new InvalidOperationException("Steam config not found");
@@ -150,7 +207,7 @@ public partial class GameRefreshService(
             }
         }
 
-        // 13. Sync own unlock status from Steam
+        // 13. Sync own unlock status from Steam + refresh current playtime
         if (session.SteamId64.HasValue)
         {
             var myAchs = await steamApi.GetPlayerAchievementsAsync(
@@ -166,6 +223,11 @@ public partial class GameRefreshService(
                     row.ScheduledUnlockAt = null;
                 }
             }
+
+            var currentPlaytime = await steamApi.GetPlayerGamePlaytimeAsync(
+                (long)session.SteamId64.Value, appId, apiKey, ct);
+            if (currentPlaytime > 0)
+                game.SteamPlaytimeAtRefresh = currentPlaytime;
         }
 
         game.AchievementsCachedAt = DateTime.UtcNow;

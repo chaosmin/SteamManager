@@ -86,6 +86,17 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("SET time_zone = '+00:00'");
 
+    // Idempotent column additions — guard against partial migration state
+    await db.Database.ExecuteSqlRawAsync(@"
+        SET @s = IF(
+            NOT EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'steam_config'
+                AND COLUMN_NAME = 'max_concurrent_games'),
+            'ALTER TABLE steam_config ADD COLUMN max_concurrent_games INT NOT NULL DEFAULT 1',
+            'SELECT 1');
+        PREPARE stmt FROM @s; EXECUTE stmt; DEALLOCATE PREPARE stmt;");
+
     // Ensure tables exist — guard against migration history/table state mismatch
     await db.Database.ExecuteSqlRawAsync(@"
         CREATE TABLE IF NOT EXISTS steam_audit_log (
@@ -103,45 +114,6 @@ using (var scope = app.Services.CreateScope())
             KEY IX_steam_audit_log_Source_Operation (Source, Operation)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-    await db.Database.ExecuteSqlRawAsync(@"
-        CREATE TABLE IF NOT EXISTS game_queue (
-            id INT NOT NULL AUTO_INCREMENT,
-            game_id INT NOT NULL,
-            position INT NOT NULL DEFAULT 0,
-            added_at DATETIME(6) NOT NULL,
-            PRIMARY KEY (id),
-            UNIQUE KEY IX_game_queue_game_id (game_id),
-            KEY IX_game_queue_position (position),
-            CONSTRAINT FK_game_queue_game_game_id
-                FOREIGN KEY (game_id) REFERENCES game (id) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-    await db.Database.ExecuteSqlRawAsync(@"
-        CREATE TABLE IF NOT EXISTS game_reference_player (
-            id INT NOT NULL AUTO_INCREMENT,
-            game_id INT NOT NULL,
-            player_url VARCHAR(512) NOT NULL,
-            override_burst_check TINYINT(1) NOT NULL DEFAULT 0,
-            created_at DATETIME(6) NOT NULL,
-            updated_at DATETIME(6) NOT NULL,
-            PRIMARY KEY (id),
-            UNIQUE KEY IX_game_reference_player_game_id (game_id),
-            CONSTRAINT FK_game_reference_player_game_game_id
-                FOREIGN KEY (game_id) REFERENCES game (id) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-    // Add new game columns (ignore if already exists)
-    foreach (var ddl in new[]
-    {
-        "ALTER TABLE game ADD COLUMN steam_playtime_at_refresh INT NOT NULL DEFAULT 0",
-        "ALTER TABLE game ADD COLUMN target_minutes INT NULL",
-        "ALTER TABLE game ADD COLUMN session_started_at DATETIME(6) NULL",
-        "ALTER TABLE achievement ADD COLUMN scheduled_unlock_at DATETIME(6) NULL",
-    })
-    {
-        try { await db.Database.ExecuteSqlRawAsync(ddl); }
-        catch (Exception) { /* column already exists — ignore */ }
-    }
 }
 
 // Startup recovery — run in background so Kestrel starts immediately

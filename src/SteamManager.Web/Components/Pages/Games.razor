@@ -159,25 +159,41 @@ else
                     <MudItem xs="12" sm="6" md="4" lg="3">
                         <MudCard Elevation="3" Class="game-card" Style="overflow:hidden;height:100%;display:flex;flex-direction:column">
                             <div style="position:relative;cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/games/{game.Id}"))">
+                                @{
+                                    var imgThumb = (RenderFragment)(@<div style="position:relative;width:100%;aspect-ratio:460/215;background:linear-gradient(135deg,#1a2332,#0d1b2a);overflow:hidden">
+                                        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none">
+                                            <MudIcon Icon="@Icons.Material.Filled.VideogameAsset" Style="font-size:32px;color:rgba(255,255,255,0.15)" />
+                                            <span style="color:rgba(255,255,255,0.3);font-size:0.7rem;text-align:center;padding:0 8px;line-height:1.3">@(game.NameI18n ?? game.Name)</span>
+                                        </div>
+                                        <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
+                                             style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block"
+                                             onerror="this.style.display='none'" />
+                                    </div>);
+                                }
                                 @if (queuePos.HasValue && game.Status == GameStatus.Idle)
                                 {
                                     <MudBadge Content="@((queuePos.Value + 1).ToString())"
                                               Overlap="true" Bordered="true"
-                                              Color="Color.Info">
-                                        <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
-                                             style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
-                                             onerror="this.src=''" />
+                                              Color="Color.Info"
+                                              Style="width:100%;display:block">
+                                        @imgThumb
                                     </MudBadge>
                                 }
                                 else
                                 {
-                                    <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(game.AppId)/header.jpg"
-                                         style="width:100%;display:block;aspect-ratio:460/215;object-fit:cover"
-                                         onerror="this.src=''" />
+                                    @imgThumb
                                 }
                                 <div style="position:absolute;top:6px;right:6px">
-                                    <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
-                                             Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
+                                    @if (queuePos.HasValue && game.Status == GameStatus.Idle)
+                                    {
+                                        <MudChip T="string" Size="Size.Small"
+                                                 Style="background:#eab308;color:#000;font-size:0.7rem;height:22px">Queued</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="@StatusColor(game.Status)"
+                                                 Style="font-size:0.7rem;height:22px">@game.Status</MudChip>
+                                    }
                                 </div>
                             </div>
 
@@ -228,8 +244,10 @@ else
                                 }
                                 @if (game.Status == GameStatus.Playing)
                                 {
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                               OnClick="@(() => StopGame(game.AppId))">Stop</MudButton>
+                                    <MudTooltip Text="Stop">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
+                                                       OnClick="@(() => StopGame(game.AppId))" />
+                                    </MudTooltip>
                                 }
                                 else if (game.Status == GameStatus.Scheduled)
                                 {
@@ -237,24 +255,29 @@ else
                                 }
                                 else if (game.Status == GameStatus.Completed)
                                 {
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
-                                               OnClick="@(() => ForceRefreshGame(game.Id, game.AppId))">Force Refresh</MudButton>
+                                    @* No action — completed games cannot be re-queued *@
                                 }
-                                else if (queuePos.HasValue)
+                                else if (hasRefPlayer && queuePos.HasValue)
                                 {
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
-                                               OnClick="@(() => RefreshGame(game.Id, game.AppId))">Re-Refresh</MudButton>
-                                }
-                                else if (!hasRefPlayer)
-                                {
-                                    <MudTooltip Text="Configure a reference player in game detail first">
-                                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="true">Refresh</MudButton>
+                                    <MudTooltip Text="Remove from Queue">
+                                        <MudIconButton Icon="@Icons.Material.Filled.RemoveFromQueue" Color="Color.Warning" Size="Size.Small"
+                                                       OnClick="@(() => RemoveFromQueueGame(game.Id))" />
                                     </MudTooltip>
                                 }
-                                else
+                                else if (hasRefPlayer)
                                 {
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                               OnClick="@(() => RefreshGame(game.Id, game.AppId))">Refresh</MudButton>
+                                    <MudTooltip Text="Add to Queue">
+                                        <MudIconButton Icon="@Icons.Material.Filled.QueuePlayNext" Color="Color.Success" Size="Size.Small"
+                                                       OnClick="@(() => RefreshGame(game.Id, game.AppId))" />
+                                    </MudTooltip>
+                                }
+                                @if (achTotal > 0 && game.Status != GameStatus.Completed)
+                                {
+                                    <MudTooltip Text="Sync from Steam">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Sync" Size="Size.Small"
+                                                       Style="color:rgba(255,255,255,0.45)"
+                                                       OnClick="@(() => SyncGame(game.Id, game.AppId))" />
+                                    </MudTooltip>
                                 }
                                 <MudSpacer />
                                 @if (_serverValidatedAppIds.Contains(game.AppId))
@@ -332,6 +355,18 @@ else
     int? GetQueuePosition(int gameId)
         => _queue.FirstOrDefault(q => q.GameId == gameId)?.Position;
 
+    async Task RemoveFromQueueGame(int gameId)
+    {
+        try
+        {
+            await QueueService.RemoveFromQueueAsync(gameId);
+            _queue = await QueueService.GetQueueAsync();
+            await RefreshAsync();
+            Snackbar.Add("Removed from queue.", Severity.Info);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
     async Task RefreshGame(int gameId, int appId)
     {
         try
@@ -352,6 +387,22 @@ else
             _queue = await QueueService.GetQueueAsync();
             await RefreshAsync();
             Snackbar.Add("Force refresh complete.", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    async Task SyncGame(int gameId, int appId)
+    {
+        try
+        {
+            await RefreshService.SyncAsync(gameId, appId);
+            _queue = await QueueService.GetQueueAsync();
+            await RefreshAsync();
+            var game = _games.FirstOrDefault(g => g.Id == gameId);
+            var msg = game?.Status == GameStatus.Completed
+                ? "Sync complete — game marked Completed!"
+                : "Sync complete — playtime and achievements updated.";
+            Snackbar.Add(msg, game?.Status == GameStatus.Completed ? Severity.Success : Severity.Info);
         }
         catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
     }

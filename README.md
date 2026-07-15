@@ -10,19 +10,20 @@ A self-hosted Steam automation service that idles game hours and unlocks achieve
 
 ## Features
 
-- **Game Hour Idling** — simulates gameplay to accumulate hours toward a configurable target
-- **Achievement Auto-Unlock** — two-step `GetUserStats → StoreUserStats2` protocol; derives unlock timing from [SteamHunters](https://steamhunters.com) median completion data; falls back to global unlock percentage ordering
+- **Game Hour Idling** — simulates gameplay to accumulate hours toward a target derived from [SteamHunters](https://steamhunters.com) Median Completion Time (MCT)
+- **Achievement Auto-Unlock** — two-step `GetUserStats → StoreUserStats2` protocol; derives unlock timing from a linked reference player's real achievement timestamps; absolute UTC schedule assigned at Refresh; global 60 s scanner fires unlocks
+- **Reference Player** — link any SteamHunters player URL to a game; Refresh uses their unlock intervals to build the schedule; burst detection blocks suspicious data (≥ 5 achievements sharing the same timestamp)
+- **Game Queue** — dedicated idle queue with drag-and-drop reordering; configurable concurrent slot count (default 1, adjustable in Settings); queue auto-advances when a game reaches MCT
+- **Game States** — `Idle → Playing → Scheduled → Completed`; `Scheduled` = MCT reached, game offline, achievements still unlocking; `Completed` = MCT + all achievements done
+- **Smart Restart Recovery** — re-anchors scheduled unlock times on server restart using reference-interval math to prevent burst unlocks
 - **In-app Achievement Toast** — popup notification (with icon) when an achievement is unlocked, matching Steam overlay style
-- **Catch-up on Restart** — overdue achievements unlock in sequence the moment a game session resumes
-- **Checkpoint Resume** — tracks progress per-minute in MySQL; restarts pick up exactly where you left off
-- **Steam Trading Card Drops** — tracks remaining card drops per game via Steam Community badge page; filter toggle on Games page; synced automatically with library sync
-- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), and restores on every startup
-- **Dashboard** — two live summary panels (total remaining idle time + remaining achievements across all games); currently playing section with cover art, idle progress, achievement progress, and next-achievement countdown; auto-refreshes every minute
-- **Single-game Enforcement** — starting a new game automatically stops the previously running game
-- **Multi-language UI** — game and achievement names in English or Simplified Chinese (Steam's official localizations, English fallback); language selector in the top nav bar
-- **Timezone** — display timezone selector in the top nav bar, applied globally
-- **Background Sync** — scheduled (cron) or on-demand sync refreshes your library, achievement data, and card drops in one click
-- **Web UI** — Blazor Server dark-theme dashboard with real-time progress, game management, search/filter, and an optional access password
+- **Steam Trading Card Drops** — tracks remaining card drops per game; filter toggle on Games page; synced with library sync
+- **Persistent Session** — logs in once with mobile 2FA, encrypts the refresh token (AES-256), restores on every startup
+- **Dashboard** — global stat cards (remaining idle time + remaining achievements); live queue panel with drag-and-drop; per-game playing cards with cover art, progress bars, and next-achievement countdown; auto-refreshes every minute with live SignalR updates
+- **Multi-language UI** — game and achievement names in English or Simplified Chinese; language selector in top nav
+- **Timezone** — display timezone selector in top nav, applied globally
+- **Background Sync** — scheduled (cron) or on-demand sync refreshes library, achievement data, and card drops in one click
+- **Web UI** — Blazor Server dark-theme with skeleton loading, search/filter, and optional access password
 
 ## Tech Stack
 
@@ -98,9 +99,9 @@ The dashboard shows:
 
 The dashboard auto-refreshes every minute. Live idle-time updates stream in real time via SignalR.
 
-### Starting / stopping games
+### Adding games to the queue
 
-Go to **Games** and click the play button on any game card. Only one game can run at a time — starting a new game automatically stops the current one.
+On the **Games** page, click **Add to Queue** (requires a reference player configured in the game detail page). Start the queue from the Dashboard. Drag rows in the queue panel to reorder. The queue auto-advances when a game reaches its MCT.
 
 ### Trading card drops
 
@@ -108,12 +109,12 @@ The **Card drops remaining** filter on the Games page shows only games with drop
 
 ### Achievement scheduling
 
-When a game is started, SteamManager:
+Configure a **reference player** (SteamHunters URL) in the game detail page, then click **Refresh**. SteamManager:
 
-1. Refreshes achievement data from Steam (ensuring schema is current)
-2. Immediately unlocks any overdue achievements (catch-up), with 1–100 s random gaps
-3. During play, polls every ~30 s and unlocks newly-due achievements with a 1–100 s pre-unlock delay
-4. Uses the correct two-step `CMsgClientGetUserStats → CMsgClientStoreUserStats2` protocol with binary KeyValue schema parsing — same approach as [ASFAchievementManager](https://github.com/CatPoweredPlugins/ASFAchievementManager)
+1. Fetches the reference player's actual achievement unlock timestamps
+2. Assigns each achievement a concrete UTC unlock time preserving the relative intervals
+3. A global scanner fires every 60 s and unlocks any achievement whose scheduled time has passed
+4. Uses the two-step `CMsgClientGetUserStats → CMsgClientStoreUserStats2` protocol — same approach as [ASFAchievementManager](https://github.com/CatPoweredPlugins/ASFAchievementManager)
 
 ### Language & Timezone
 
@@ -175,19 +176,6 @@ docker pull chaosmin/steam-manager:latest
 Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-manager) on every push to `master` (`:latest`) and on version tags (`:v0.2.2`).
 
 ## Changelog
-
-### v0.3.3
-- Dashboard bento grid layout (4-column responsive CSS Grid)
-- Skeleton loading states on Games and GameDetail pages
-- Branded empty states with icons and CTAs (no more plain alerts)
-- Game card hover animation (scale + shadow)
-- Achievement icons enlarged 32 → 40 px in detail table
-- Global % column replaced with mini progress bar
-- Nav active state: left border indicator + tint
-- Page fade-in transition (respects `prefers-reduced-motion`)
-- Secondary text contrast bumped to meet AA (4.5:1)
-- Removed random 1–100 s jitter before achievement unlock
-- Deleted unused Blazor template stubs (Home, Counter, Weather)
 
 See [docs/changelog/](docs/changelog/) for full version history.
 

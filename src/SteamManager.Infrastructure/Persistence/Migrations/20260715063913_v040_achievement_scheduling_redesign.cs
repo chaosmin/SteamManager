@@ -12,39 +12,16 @@ namespace SteamManager.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "play_queue");
+            // Safe IF EXISTS variants — DB may already be partially migrated via inline guards
+            migrationBuilder.Sql("DROP TABLE IF EXISTS `play_queue`;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='achievement' AND INDEX_NAME='IX_achievement_game_id_is_unlocked_unlock_offset_minutes'),'ALTER TABLE `achievement` DROP INDEX `IX_achievement_game_id_is_unlocked_unlock_offset_minutes`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
 
-            migrationBuilder.DropIndex(
-                name: "IX_achievement_game_id_is_unlocked_unlock_offset_minutes",
-                table: "achievement");
-
-            migrationBuilder.DropColumn(
-                name: "reference_url",
-                table: "game");
-
-            migrationBuilder.DropColumn(
-                name: "saved_idle_delta_minutes",
-                table: "game");
-
-            migrationBuilder.DropColumn(
-                name: "unlock_offset_minutes",
-                table: "achievement");
-
-            migrationBuilder.RenameColumn(
-                name: "total_play_minutes",
-                table: "game",
-                newName: "steam_playtime_at_refresh");
-
-            migrationBuilder.RenameColumn(
-                name: "reference_play_minutes",
-                table: "game",
-                newName: "target_minutes");
-
-            migrationBuilder.RenameColumn(
-                name: "last_session_start",
-                table: "game",
-                newName: "session_started_at");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='game' AND COLUMN_NAME='reference_url'),'ALTER TABLE `game` DROP COLUMN `reference_url`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='game' AND COLUMN_NAME='saved_idle_delta_minutes'),'ALTER TABLE `game` DROP COLUMN `saved_idle_delta_minutes`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='achievement' AND COLUMN_NAME='unlock_offset_minutes'),'ALTER TABLE `achievement` DROP COLUMN `unlock_offset_minutes`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='game' AND COLUMN_NAME='total_play_minutes'),'ALTER TABLE `game` RENAME COLUMN `total_play_minutes` TO `steam_playtime_at_refresh`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='game' AND COLUMN_NAME='reference_play_minutes'),'ALTER TABLE `game` RENAME COLUMN `reference_play_minutes` TO `target_minutes`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
+            migrationBuilder.Sql(@"SET @s=IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='game' AND COLUMN_NAME='last_session_start'),'ALTER TABLE `game` RENAME COLUMN `last_session_start` TO `session_started_at`','SELECT 1');PREPARE stmt FROM @s;EXECUTE stmt;DEALLOCATE PREPARE stmt;");
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "scheduled_unlock_at",

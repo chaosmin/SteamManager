@@ -25,6 +25,13 @@
 }
 else
 {
+    <MudOverlay Visible="_saving" DarkBackground="true" ZIndex="9999">
+        <div class="d-flex flex-column align-center gap-3">
+            <MudProgressCircular Indeterminate="true" Size="Size.Large" Color="Color.Primary" />
+            <MudText Typo="Typo.body1" Style="color:#fff">Saving &amp; scheduling achievements…</MudText>
+        </div>
+    </MudOverlay>
+
     <MudBreadcrumbs Items="_breadcrumbs" Class="mb-2 px-0" />
 
     <!-- Game header -->
@@ -34,22 +41,8 @@ else
              onerror="this.style.display='none'" />
     </div>
 
-    <div class="d-flex align-center justify-space-between mb-1">
+    <div class="mb-1">
         <MudText Typo="Typo.h4">@(_game.NameI18n ?? _game.Name)</MudText>
-        <div class="d-flex gap-2">
-            <MudButton Variant="Variant.Outlined" Color="Color.Error"
-                       StartIcon="@Icons.Material.Filled.Replay"
-                       OnClick="ForceReplayAsync"
-                       Disabled="_forceReplaying || _loading">
-                @(_forceReplaying ? "Resetting..." : "Force Replay")
-            </MudButton>
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.Refresh"
-                       OnClick="RefreshAchievementsAsync"
-                       Disabled="_loading || _forceReplaying">
-                @(_loading ? "Refreshing..." : "Refresh")
-            </MudButton>
-        </div>
     </div>
     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
         App ID: @_game.AppId &nbsp;|&nbsp;
@@ -96,10 +89,14 @@ else
                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link" />
             <MudCheckBox @bind-Value="_overrideBurst" Dense="true" Class="mb-3"
                          Label="Override burst detection" />
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2 mt-3 mb-4">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePlayer">Save</MudButton>
-                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
-                           Disabled="@(!_hasPlayer)" OnClick="RefreshGame">Refresh</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                           Disabled="@(!_hasPlayer)" OnClick="ForceRefreshGame">Force Replay</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.OpenInNew"
+                           Href="@($"https://steamhunters.com/apps/{_game?.AppId}/users?sort=achievements")"
+                           Target="_blank">SteamHunters</MudButton>
                 @if (_hasPlayer)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemovePlayer">
@@ -129,18 +126,25 @@ else
     }
     else
     {
-        <MudTable Items="_game.Achievements.OrderBy(a => a.ScheduledUnlockAt ?? DateTime.MaxValue)"
-                  Hover="true" Elevation="2" Dense="true">
+        <MudTable T="Achievement" Items="_game.Achievements
+                      .OrderBy(a =>
+                          a.IsUnlocked ? 3 :
+                          a.ScheduledUnlockAt.HasValue && a.ScheduledUnlockAt.Value <= DateTime.UtcNow ? 0 :
+                          a.ScheduledUnlockAt.HasValue ? 1 : 2)
+                      .ThenBy(a => a.IsUnlocked
+                          ? long.MaxValue - (a.UnlockedAt ?? DateTime.MinValue).Ticks
+                          : (a.ScheduledUnlockAt ?? DateTime.MinValue).Ticks)"
+                  Hover="true" Elevation="2" Dense="true"
+                  RowClassFunc="@((ach, _) => GetAchRowClass(ach))">
             <HeaderContent>
                 <MudTh Style="width:56px"></MudTh>
                 <MudTh>Achievement</MudTh>
                 <MudTh Style="width:120px">Global %</MudTh>
-                <MudTh Style="width:150px">Scheduled At</MudTh>
+                <MudTh Style="width:165px">Scheduled At</MudTh>
                 <MudTh Style="width:110px">Status</MudTh>
-                <MudTh Style="width:120px">Time</MudTh>
+                <MudTh Style="width:165px">Time</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTr Class="@GetAchRowClass(context)">
                 <MudTd>
                     @{
                         var icon = context.IsUnlocked ? context.IconUrl : context.IconGrayUrl;
@@ -170,7 +174,7 @@ else
                 @* Scheduled At *@
                 <MudTd Style="color:rgba(255,255,255,0.55);font-size:0.8rem">
                     @(context.ScheduledUnlockAt.HasValue
-                        ? context.ScheduledUnlockAt.Value.ToLocalTime().ToString("MM-dd HH:mm")
+                        ? context.ScheduledUnlockAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                         : "—")
                 </MudTd>
 
@@ -189,7 +193,7 @@ else
                     @if (context.IsUnlocked && context.UnlockedAt.HasValue)
                     {
                         <span style="color:#22C55E;font-size:0.8rem">
-                            @context.UnlockedAt.Value.ToLocalTime().ToString("MM-dd HH:mm")
+                            @context.UnlockedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                         </span>
                     }
                     else if (context.ScheduledUnlockAt.HasValue)
@@ -214,7 +218,6 @@ else
                         <span style="color:rgba(255,255,255,0.3)">—</span>
                     }
                 </MudTd>
-                </MudTr>
             </RowTemplate>
         </MudTable>
     }
@@ -235,7 +238,6 @@ else
     int _total;
     int _unlocked;
     bool _loading;
-    bool _forceReplaying;
     string? _loadError;
     string _timezone = "UTC";
 
@@ -246,6 +248,7 @@ else
     private bool _overrideBurst;
     private bool _playerPanelExpanded;
     private string? _playerError;
+    private bool _saving;
 
     private List<BreadcrumbItem> _breadcrumbs =
     [
@@ -289,16 +292,30 @@ else
 
     private async Task SavePlayer()
     {
-        if (string.IsNullOrWhiteSpace(_playerUrl)) return;
-        var refPlayer = await Db.GameReferencePlayers.FirstOrDefaultAsync(r => r.GameId == _game!.Id);
-        if (refPlayer == null)
-            Db.GameReferencePlayers.Add(new GameReferencePlayer
-                { GameId = _game!.Id, PlayerUrl = _playerUrl.Trim(), OverrideBurstCheck = _overrideBurst });
-        else
-            { refPlayer.PlayerUrl = _playerUrl.Trim(); refPlayer.OverrideBurstCheck = _overrideBurst; }
-        await Db.SaveChangesAsync();
-        await LoadReferencePlayerAsync();
-        Snackbar.Add("Reference player saved.", Severity.Success);
+        _playerError = null;
+        if (string.IsNullOrWhiteSpace(_playerUrl))
+        {
+            _playerError = "Player URL is required.";
+            return;
+        }
+        _saving = true;
+        StateHasChanged();
+        try
+        {
+            var refPlayer = await Db.GameReferencePlayers.FirstOrDefaultAsync(r => r.GameId == _game!.Id);
+            if (refPlayer == null)
+                Db.GameReferencePlayers.Add(new GameReferencePlayer
+                    { GameId = _game!.Id, PlayerUrl = _playerUrl.Trim(), OverrideBurstCheck = _overrideBurst });
+            else
+                { refPlayer.PlayerUrl = _playerUrl.Trim(); refPlayer.OverrideBurstCheck = _overrideBurst; }
+            await Db.SaveChangesAsync();
+            await LoadReferencePlayerAsync();
+            await RefreshService.RefreshAsync(_game!.Id, _game.AppId);
+            await RefreshAchievementsAsync();
+            Snackbar.Add("Reference player saved and achievements scheduled.", Severity.Success);
+        }
+        catch (Exception ex) { _playerError = ex.Message; }
+        finally { _saving = false; StateHasChanged(); }
     }
 
     private async Task RemovePlayer()
@@ -308,14 +325,14 @@ else
         _hasPlayer = false; _playerUrl = ""; _playerUrlShort = "";
     }
 
-    private async Task RefreshGame()
+    private async Task ForceRefreshGame()
     {
         _playerError = null;
         try
         {
-            await RefreshService.RefreshAsync(_game!.Id, _game.AppId);
+            await RefreshService.ForceRefreshAsync(_game!.Id, _game.AppId);
             await RefreshAchievementsAsync();
-            Snackbar.Add("Refresh complete.", Severity.Success);
+            Snackbar.Add("Force refresh complete — all achievements rescheduled.", Severity.Success);
         }
         catch (Exception ex) { _playerError = ex.Message; StateHasChanged(); }
     }
@@ -353,50 +370,6 @@ else
         }
     }
 
-    async Task ForceReplayAsync()
-    {
-        if (_game == null) return;
-        _forceReplaying = true;
-        StateHasChanged();
-        try
-        {
-            // 1. Stop current idle session
-            await IdleService.StopAsync(_game.AppId);
-
-            // 2. Lock all unlocked achievements on Steam
-            var toLock = _game.Achievements.Where(a => a.IsUnlocked).Select(a => a.ApiName).ToList();
-            foreach (var apiName in toLock)
-                await AchHandler.LockAchievementAsync(_game.AppId, apiName);
-
-            // 3. Reset DB — achievements only (playtime preserved; scheduler uses session timer)
-            var game = await Db.Games.Include(g => g.Achievements).FirstAsync(g => g.Id == _game.Id);
-            game.Status = GameStatus.Idle;
-            foreach (var ach in game.Achievements)
-            {
-                ach.IsUnlocked = false;
-                ach.UnlockedAt = null;
-            }
-            await Db.SaveChangesAsync();
-
-            // 4. Start fresh idle
-            await IdleService.StartAsync(_game.AppId);
-
-            // 5. Reload page data
-            _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).Include(g => g.ReferencePlayer).FirstOrDefaultAsync(g => g.Id == Id);
-            UpdateCounts();
-            Snackbar.Add("Force replay started — all achievements reset and idling restarted", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Force replay failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _forceReplaying = false;
-            StateHasChanged();
-        }
-    }
-
     void UpdateCounts()
     {
         if (_game == null) return;
@@ -404,7 +377,7 @@ else
         _unlocked = _game.Achievements.Count(a => a.IsUnlocked);
     }
 
-    string FormatTime(DateTime utc, string format = "yyyy-MM-dd HH:mm")
+    string FormatTime(DateTime utc, string format = "yyyy-yyyy-MM-dd HH:mm")
     {
         try
         {

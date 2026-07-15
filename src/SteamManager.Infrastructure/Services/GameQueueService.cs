@@ -36,6 +36,7 @@ public class GameQueueService : IGameQueueService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         return await db.GameQueue
             .Include(q => q.Game)
+            .Where(q => q.Game.Status != GameStatus.Completed)
             .OrderBy(q => q.Position)
             .Select(q => new QueueEntry(
                 q.GameId, q.Game.AppId,
@@ -71,11 +72,13 @@ public class GameQueueService : IGameQueueService
 
     public async Task StartQueueAsync(CancellationToken ct = default)
     {
-        var slotsAvailable = 2 - _idleService.PlayingAppIds.Count;
-        if (slotsAvailable <= 0) return;
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
+        var maxSlots = cfg?.MaxConcurrentGames ?? 1;
+        var slotsAvailable = maxSlots - _idleService.PlayingAppIds.Count;
+        if (slotsAvailable <= 0) return;
 
         var idleItems = await db.GameQueue
             .Include(q => q.Game)
@@ -100,7 +103,9 @@ public class GameQueueService : IGameQueueService
         if (completed != null) { db.GameQueue.Remove(completed); await db.SaveChangesAsync(ct); }
 
         // Fill available slot
-        if (2 - _idleService.PlayingAppIds.Count <= 0) return;
+        var cfg = await db.SteamConfigs.FirstOrDefaultAsync(ct);
+        var maxSlots = cfg?.MaxConcurrentGames ?? 1;
+        if (maxSlots - _idleService.PlayingAppIds.Count <= 0) return;
         var next = await db.GameQueue
             .Include(q => q.Game)
             .Where(q => q.Game.Status == GameStatus.Idle)

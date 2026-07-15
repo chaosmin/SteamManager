@@ -11,6 +11,7 @@ public class SteamConfig
     public string DisplayTimezone { get; set; } = "UTC";
     public string SyncCron { get; set; } = "0 0 * * *"; // default: daily at midnight
     public string Language { get; set; } = "english";   // steam API language: english / schinese
+    public int MaxConcurrentGames { get; set; } = 1;    // max simultaneous idle slots
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

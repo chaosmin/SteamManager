@@ -78,6 +78,8 @@ public class UnlockSchedulerService(
                 {
                     ach.Game.Status = GameStatus.Completed;
                     await db.SaveChangesAsync(ct);
+                    var queueSvc = scope.ServiceProvider.GetRequiredService<IGameQueueService>();
+                    await queueSvc.RemoveFromQueueAsync(ach.GameId);
                     logger.LogInformation("Game {AppId} fully completed", ach.AppId);
 
                     var totalCount = await db.Achievements
