@@ -1,11 +1,9 @@
 @page "/games/{Id:int}"
 @rendermode InteractiveServer
 @inject AppDbContext Db
-@inject IAchievementDataService AchievementService
 @inject NavigationManager Nav
 @inject AchievementHandler AchHandler
 @inject IGameIdleService IdleService
-@inject IUnlockSchedulerService SchedulerService
 @inject ISnackbar Snackbar
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
@@ -54,7 +52,7 @@ else
     </div>
     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-2">
         App ID: @_game.AppId &nbsp;|&nbsp;
-        Idle time: @($"{_game.TotalPlayMinutes / 60.0:F1}h") / @(_game.ReferencePlayMinutes.HasValue ? $"{_game.ReferencePlayMinutes.Value / 60.0:F2}h" : "10h")
+        Idle time: @($"{_game.SteamPlaytimeAtRefresh / 60.0:F1}h") / @(_game.TargetMinutes.HasValue ? $"{_game.TargetMinutes.Value / 60.0:F2}h" : "10h")
         @if (_total > 0)
         {
             <span> &nbsp;|&nbsp; Achievements: @_unlocked / @_total unlocked</span>
@@ -74,14 +72,14 @@ else
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                        OnClick="SaveReferenceUrlAsync">Save</MudButton>
             <MudButton Variant="Variant.Text" Size="Size.Small"
-                       OnClick="@(() => { _editingUrl = false; _referenceUrl = _game.ReferenceUrl; })">Cancel</MudButton>
+                       OnClick="@(() => { _editingUrl = false; _referenceUrl = _game.ReferencePlayer?.PlayerUrl; })">Cancel</MudButton>
         }
-        else if (!string.IsNullOrWhiteSpace(_game.ReferenceUrl))
+        else if (!string.IsNullOrWhiteSpace(_game.ReferencePlayer?.PlayerUrl))
         {
             <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" Style="color:rgba(255,255,255,0.45)" />
-            <MudLink Href="@_game.ReferenceUrl" Target="_blank" Typo="Typo.body2"
+            <MudLink Href="@_game.ReferencePlayer!.PlayerUrl" Target="_blank" Typo="Typo.body2"
                      Style="color:#66c0f4;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                @_game.ReferenceUrl
+                @_game.ReferencePlayer!.PlayerUrl
             </MudLink>
             <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
                            OnClick="@(() => _editingUrl = true)" Title="Edit reference URL" />
@@ -113,16 +111,15 @@ else
     }
     else
     {
-        <MudTable Items="_game.Achievements.OrderBy(a => a.UnlockOffsetMinutes)"
+        <MudTable Items="_game.Achievements.OrderBy(a => a.ScheduledUnlockAt ?? DateTime.MaxValue)"
                   Hover="true" Elevation="2" Dense="true">
             <HeaderContent>
                 <MudTh Style="width:56px"></MudTh>
                 <MudTh>Achievement</MudTh>
                 <MudTh Style="width:120px">Global %</MudTh>
                 <MudTh>Status</MudTh>
-                <MudTh>Cost</MudTh>
-                <MudTh>Offset</MudTh>
-                <MudTh>Unlock At</MudTh>
+                <MudTh>Scheduled At</MudTh>
+                <MudTh>Unlocked At</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>
@@ -161,11 +158,16 @@ else
                     }
                 </MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.caption">@($"{context.UnlockOffsetMinutes / 60}h {context.UnlockOffsetMinutes % 60}m")</MudText>
-                </MudTd>
-                <MudTd>
-                    @{ var delta = _offsetDeltas.GetValueOrDefault(context.Id, context.UnlockOffsetMinutes); }
-                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.5)">+@($"{delta / 60}h {delta % 60}m")</MudText>
+                    @if (context.ScheduledUnlockAt.HasValue)
+                    {
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">
+                            @FormatTime(context.ScheduledUnlockAt.Value)
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.3)">—</MudText>
+                    }
                 </MudTd>
                 <MudTd>
                     @if (context.IsUnlocked && context.UnlockedAt.HasValue)
@@ -174,17 +176,16 @@ else
                             @FormatTime(context.UnlockedAt.Value)
                         </MudText>
                     }
-                    else if (!context.IsUnlocked)
+                    else if (!context.IsUnlocked && context.ScheduledUnlockAt.HasValue)
                     {
-                        var remaining = context.UnlockOffsetMinutes - _game.TotalPlayMinutes;
-                        @if (remaining <= 0)
+                        @if (context.ScheduledUnlockAt.Value <= DateTime.UtcNow)
                         {
                             <MudText Typo="Typo.caption" Color="Color.Warning">Pending unlock</MudText>
                         }
                         else
                         {
                             <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.6)">
-                                in @($"{remaining / 60.0:F1}h")
+                                in @($"{(context.ScheduledUnlockAt.Value - DateTime.UtcNow).TotalHours:F1}h")
                             </MudText>
                         }
                     }
@@ -220,11 +221,12 @@ else
 
         _game = await Db.Games.AsNoTracking()
             .Include(g => g.Achievements)
+            .Include(g => g.ReferencePlayer)
             .FirstOrDefaultAsync(g => g.Id == Id);
 
         if (_game == null) return;
         _breadcrumbs[1] = new(_game.NameI18n ?? _game.Name, href: null, disabled: true);
-        _referenceUrl = _game.ReferenceUrl;
+        _referenceUrl = _game.ReferencePlayer?.PlayerUrl;
 
         if (_game.Achievements.Count == 0)
             await RefreshAchievementsAsync();
@@ -240,9 +242,9 @@ else
         StateHasChanged();
         try
         {
-            await AchievementService.LoadAchievementsAsync(_game.Id, _game.AppId);
             _game = await Db.Games
                 .Include(g => g.Achievements)
+                .Include(g => g.ReferencePlayer)
                 .FirstOrDefaultAsync(g => g.Id == Id);
             UpdateCounts();
         }
@@ -266,14 +268,13 @@ else
         {
             // 1. Stop current idle session
             await IdleService.StopAsync(_game.AppId);
-            await SchedulerService.StopAsync(_game.AppId);
 
             // 2. Lock all unlocked achievements on Steam
             var toLock = _game.Achievements.Where(a => a.IsUnlocked).Select(a => a.ApiName).ToList();
             foreach (var apiName in toLock)
                 await AchHandler.LockAchievementAsync(_game.AppId, apiName);
 
-            // 3. Reset DB — achievements only (TotalPlayMinutes left as-is; scheduler uses session timer)
+            // 3. Reset DB — achievements only (playtime preserved; scheduler uses session timer)
             var game = await Db.Games.Include(g => g.Achievements).FirstAsync(g => g.Id == _game.Id);
             game.Status = GameStatus.Idle;
             foreach (var ach in game.Achievements)
@@ -283,12 +284,11 @@ else
             }
             await Db.SaveChangesAsync();
 
-            // 4. Start fresh idle + scheduler
+            // 4. Start fresh idle
             await IdleService.StartAsync(_game.AppId);
-            await SchedulerService.StartAsync(_game.AppId);
 
             // 5. Reload page data
-            _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).FirstOrDefaultAsync(g => g.Id == Id);
+            _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).Include(g => g.ReferencePlayer).FirstOrDefaultAsync(g => g.Id == Id);
             UpdateCounts();
             Snackbar.Add("Force replay started — all achievements reset and idling restarted", Severity.Success);
         }
@@ -305,32 +305,17 @@ else
 
     async Task SaveReferenceUrlAsync()
     {
-        if (_game == null) return;
-        var game = await Db.Games.FirstAsync(g => g.Id == _game.Id);
-        game.ReferenceUrl = string.IsNullOrWhiteSpace(_referenceUrl) ? null : _referenceUrl.Trim();
-        await Db.SaveChangesAsync();
-        _game = await Db.Games.AsNoTracking().Include(g => g.Achievements).FirstOrDefaultAsync(g => g.Id == Id);
-        _referenceUrl = _game?.ReferenceUrl;
+        // TODO Task 12: persist to GameReferencePlayer table
         _editingUrl = false;
-        Snackbar.Add("Reference URL saved", Severity.Success);
+        await Task.CompletedTask;
+        Snackbar.Add("Reference player URL (save not yet implemented — coming in Task 12)", Severity.Info);
     }
-
-    Dictionary<int, int> _offsetDeltas = new();
 
     void UpdateCounts()
     {
         if (_game == null) return;
         _total = _game.Achievements.Count;
         _unlocked = _game.Achievements.Count(a => a.IsUnlocked);
-
-        _offsetDeltas.Clear();
-        var ordered = _game.Achievements.OrderBy(a => a.UnlockOffsetMinutes).ToList();
-        int prev = 0;
-        foreach (var a in ordered)
-        {
-            _offsetDeltas[a.Id] = a.UnlockOffsetMinutes - prev;
-            prev = a.UnlockOffsetMinutes;
-        }
     }
 
     string FormatTime(DateTime utc, string format = "yyyy-MM-dd HH:mm")

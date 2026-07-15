@@ -2,7 +2,6 @@
 @rendermode InteractiveServer
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
-@inject IUnlockSchedulerService SchedulerService
 @inject IServiceScopeFactory ScopeFactory
 @inject NavigationManager Nav
 @implements IDisposable
@@ -147,9 +146,7 @@ else
                                     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
                                         @foreach (var ach in _upcomingAchs)
                                         {
-                                            var rem = SchedulerService.GetTimeUntilNext(_runningGame!.AppId, ach.OffsetMinutes);
-                                            var tip = $"{ach.Name}  ·  in {FormatMinutes(rem.HasValue ? (int)rem.Value.TotalMinutes : 0)}";
-                                            <MudTooltip Text="@tip" Arrow="true" Placement="Placement.Top">
+                                            <MudTooltip Text="@ach.Name" Arrow="true" Placement="Placement.Top">
                                                 <img src="@(ach.Icon ?? "")" width="32" height="32"
                                                      style="border-radius:4px;opacity:0.45;cursor:default"
                                                      onerror="this.style.display='none'" />
@@ -194,7 +191,7 @@ else
     List<UpcomingAch> _upcomingAchs = [];
     bool _stopping;
 
-    record UpcomingAch(string Name, string? Icon, int OffsetMinutes);
+    record UpcomingAch(string Name, string? Icon);
 
     protected override async Task OnInitializedAsync()
     {
@@ -227,15 +224,11 @@ else
         foreach (var game in _games)
         {
             var achTotal = game.Achievements.Count;
-            var refMinutes = game.ReferencePlayMinutes.HasValue && game.ReferencePlayMinutes.Value > 0
-                ? game.ReferencePlayMinutes.Value
-                : achTotal > 0
-                    ? game.Achievements.Max(a => a.UnlockOffsetMinutes)
-                    : 600;
-            if (refMinutes == 0) refMinutes = 600;
+            var refMinutes = game.TargetMinutes is > 0 ? game.TargetMinutes.Value : 600;
+            var playedMinutes = game.SteamPlaytimeAtRefresh;
 
-            totalRemainingMinutes += Math.Max(0, refMinutes - game.TotalPlayMinutes);
-            totalPlayedMinutes += game.TotalPlayMinutes;
+            totalRemainingMinutes += Math.Max(0, refMinutes - playedMinutes);
+            totalPlayedMinutes += playedMinutes;
             totalRefMinutes += refMinutes;
 
             if (achTotal > 0)
@@ -245,41 +238,34 @@ else
                 totalUnlocked += game.Achievements.Count(a => a.IsUnlocked);
             }
 
-            if (game.Status == GameStatus.Running)
+            if (game.Status == GameStatus.Playing)
             {
                 _runningGame = game;
                 var achDone = game.Achievements.Count(a => a.IsUnlocked);
                 _runAchTotal = achTotal;
                 _runAchDone = achDone;
-                _runPlayedH = game.TotalPlayMinutes / 60.0;
-                _runRemainingH = Math.Max(0, refMinutes - game.TotalPlayMinutes) / 60.0;
+                _runPlayedH = playedMinutes / 60.0;
+                _runRemainingH = Math.Max(0, refMinutes - playedMinutes) / 60.0;
                 _runRefH = refMinutes / 60.0;
-                _runIdlePct = refMinutes > 0 ? Math.Min(100.0, game.TotalPlayMinutes * 100.0 / refMinutes) : 0;
+                _runIdlePct = refMinutes > 0 ? Math.Min(100.0, playedMinutes * 100.0 / refMinutes) : 0;
                 _runAchPct = achTotal > 0 ? achDone * 100.0 / achTotal : 0;
 
                 var nextAch = game.Achievements
-                    .Where(a => !a.IsUnlocked)
-                    .OrderBy(a => a.UnlockOffsetMinutes)
+                    .Where(a => !a.IsUnlocked && a.ScheduledUnlockAt.HasValue)
+                    .OrderBy(a => a.ScheduledUnlockAt)
                     .FirstOrDefault();
                 _nextAchName = nextAch != null ? (nextAch.DisplayNameI18n ?? nextAch.DisplayName) : null;
                 _nextAchIcon = nextAch?.IconUrl;
-                if (nextAch != null)
-                {
-                    var remaining = SchedulerService.GetTimeUntilNext(game.AppId, nextAch.UnlockOffsetMinutes);
-                    _minutesUntilNextAch = remaining.HasValue ? (int)remaining.Value.TotalMinutes : 0;
-                }
-                else
-                {
-                    _minutesUntilNextAch = 0;
-                }
+                _minutesUntilNextAch = nextAch?.ScheduledUnlockAt.HasValue == true
+                    ? (int)Math.Max(0, (nextAch.ScheduledUnlockAt.Value - DateTime.UtcNow).TotalMinutes)
+                    : 0;
                 _upcomingAchs = game.Achievements
-                    .Where(a => !a.IsUnlocked)
-                    .OrderBy(a => a.UnlockOffsetMinutes)
+                    .Where(a => !a.IsUnlocked && a.ScheduledUnlockAt.HasValue)
+                    .OrderBy(a => a.ScheduledUnlockAt)
                     .Skip(1)
                     .Select(a => new UpcomingAch(
                         a.DisplayNameI18n ?? a.DisplayName,
-                        a.IconGrayUrl ?? a.IconUrl,
-                        a.UnlockOffsetMinutes))
+                        a.IconGrayUrl ?? a.IconUrl))
                     .ToList();
             }
         }
@@ -301,8 +287,8 @@ else
         var game = _games.FirstOrDefault(g => g.AppId == appId);
         if (game != null)
         {
-            game.TotalPlayMinutes = minutes;
-            game.Status = GameStatus.Running;
+            game.SteamPlaytimeAtRefresh = minutes;
+            game.Status = GameStatus.Playing;
             ComputeStats();
             InvokeAsync(StateHasChanged);
         }
@@ -317,16 +303,12 @@ else
         {
             var appId = _runningGame.AppId;
             await IdleService.StopAsync(appId);
-            await SchedulerService.StopAsync(appId);
 
             using var scope = ScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
             var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
             if (game != null) game.Status = GameStatus.Idle;
-
-            var queueItem = await db.PlayQueueItems.FirstOrDefaultAsync(q => q.IsActive);
-            if (queueItem != null) queueItem.IsActive = false;
 
             await db.SaveChangesAsync();
 

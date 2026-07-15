@@ -2,13 +2,10 @@
 @rendermode InteractiveServer
 @inject AppDbContext Db
 @inject IGameIdleService IdleService
-@inject IUnlockSchedulerService SchedulerService
-@inject IPlayQueueService QueueService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject ISteamSessionService Session
 @inject SteamWebApiClient SteamApi
-@inject IAchievementDataService AchievementService
 @inject SteamCommunityClient CommunityClient
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
@@ -24,35 +21,6 @@
     </MudButton>
 </div>
 
-@if (_queue.Count > 0)
-{
-    <MudPaper Elevation="2" Class="mb-4 pa-3">
-        <MudText Typo="Typo.subtitle1" Class="mb-2">
-            <MudIcon Icon="@Icons.Material.Filled.QueuePlayNext" Size="Size.Small" Class="mr-1" />
-            Play Queue (@_queue.Count)
-        </MudText>
-        <div class="d-flex flex-wrap gap-2">
-            @foreach (var entry in _queue)
-            {
-                <MudChip T="string"
-                         Color="@(entry.IsActive ? Color.Success : Color.Default)"
-                         Size="Size.Small"
-                         OnClose="@(async () => await RemoveFromQueue(entry.QueueItemId))"
-                         CloseIcon="@Icons.Material.Filled.Close">
-                    @if (entry.IsActive)
-                    {
-                        <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Class="mr-1" />
-                    }
-                    @(entry.NameI18n ?? entry.Name)
-                    @if (entry.SavedSessionMinutes > 0)
-                    {
-                        <span style="opacity:0.7;font-size:0.7rem"> (@($"{entry.SavedSessionMinutes / 60}h{entry.SavedSessionMinutes % 60}m"))</span>
-                    }
-                </MudChip>
-            }
-        </div>
-    </MudPaper>
-}
 
 @if (_loading)
 {
@@ -155,17 +123,12 @@ else
             <MudGrid Spacing="3">
                 @foreach (var game in filtered)
                 {
-                    var played = game.TotalPlayMinutes;
+                    var played = game.SteamPlaytimeAtRefresh;
                     var stats = _achStats.GetValueOrDefault(game.Id);
                     var achTotal = stats?.Total ?? 0;
                     var achDone = stats?.Unlocked ?? 0;
 
-                    var refMinutes = game.ReferencePlayMinutes.HasValue && game.ReferencePlayMinutes.Value > 0
-                        ? game.ReferencePlayMinutes.Value
-                        : achTotal > 0
-                            ? stats!.MaxOffset
-                            : 600;
-                    if (refMinutes == 0) refMinutes = 600;
+                    var refMinutes = game.TargetMinutes is > 0 ? game.TargetMinutes.Value : 600;
 
                     double playGreenPct, playSecondPct;
                     string secondColor;
@@ -251,19 +214,11 @@ else
                                     <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" Size="Size.Small"
                                                    OnClick="@(() => StartGame(game.AppId))" />
                                 }
-                                else if (game.Status == GameStatus.Running)
+                                else if (game.Status == GameStatus.Playing)
                                 {
                                     <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
                                                    OnClick="@(() => StopGame(game.AppId))" />
                                 }
-                                @{
-                                    var inQueue = _queue.Any(q => q.GameId == game.Id);
-                                }
-                                <MudIconButton Icon="@(inQueue ? Icons.Material.Filled.PlaylistAddCheck : Icons.Material.Filled.PlaylistAdd)"
-                                               Color="@(inQueue ? Color.Secondary : Color.Default)"
-                                               Size="Size.Small"
-                                               Title="@(inQueue ? "In queue" : "Add to queue")"
-                                               OnClick="@(async () => await ToggleQueue(game.Id, inQueue))" />
                                 <MudSpacer />
                                 @if (_serverValidatedAppIds.Contains(game.AppId))
                                 {
@@ -282,12 +237,11 @@ else
 }
 
 @code {
-    record AchievementStats(int Total, int Unlocked, int MaxOffset);
+    record AchievementStats(int Total, int Unlocked);
     enum SortOption { NameAsc, NameDesc, PlaytimeAsc, PlaytimeDesc, AchAsc, AchDesc }
 
     List<Game> _games = [];
     Dictionary<int, AchievementStats> _achStats = [];
-    List<QueueEntry> _queue = [];
     HashSet<int> _serverValidatedAppIds = [];
     bool _loading = true;
     bool _syncing;
@@ -299,13 +253,8 @@ else
 
     int RemainingMinutes(Game g)
     {
-        var stats = _achStats.GetValueOrDefault(g.Id);
-        var achTotal = stats?.Total ?? 0;
-        var refMin = g.ReferencePlayMinutes is > 0
-            ? g.ReferencePlayMinutes.Value
-            : achTotal > 0 ? stats!.MaxOffset : 600;
-        if (refMin == 0) refMin = 600;
-        return Math.Max(0, refMin - g.TotalPlayMinutes);
+        var refMin = g.TargetMinutes is > 0 ? g.TargetMinutes.Value : 600;
+        return Math.Max(0, refMin - g.SteamPlaytimeAtRefresh);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -326,11 +275,9 @@ else
                 GameId = g.Key,
                 Total = g.Count(),
                 Unlocked = g.Count(a => a.IsUnlocked),
-                MaxOffset = g.Max(a => a.UnlockOffsetMinutes),
             })
             .ToListAsync();
-        _achStats = raw.ToDictionary(s => s.GameId, s => new AchievementStats(s.Total, s.Unlocked, s.MaxOffset));
-        _queue = await QueueService.GetQueueAsync();
+        _achStats = raw.ToDictionary(s => s.GameId, s => new AchievementStats(s.Total, s.Unlocked));
         var failedAppIds = await Db.SteamAuditLogs
             .Where(l => l.Operation == "StoreUserStats" && !l.Success && l.AppId != null)
             .Select(l => l.AppId!.Value)
@@ -340,47 +287,18 @@ else
         _loading = false;
     }
 
-    async Task ToggleQueue(int gameId, bool inQueue)
-    {
-        if (inQueue)
-        {
-            var entry = _queue.FirstOrDefault(q => q.GameId == gameId);
-            if (entry != null) await RemoveFromQueue(entry.QueueItemId);
-        }
-        else
-        {
-            await QueueService.AddToQueueAsync(gameId);
-            _queue = await QueueService.GetQueueAsync();
-            Snackbar.Add("Added to play queue", Severity.Success);
-            StateHasChanged();
-        }
-    }
-
-    async Task RemoveFromQueue(int queueItemId)
-    {
-        await QueueService.RemoveFromQueueAsync(queueItemId);
-        _queue = await QueueService.GetQueueAsync();
-        await RefreshAsync();
-        StateHasChanged();
-    }
-
     async Task StartGame(int appId)
     {
         try
         {
-            var currentlyRunning = _games.FirstOrDefault(g => g.Status == GameStatus.Running && g.AppId != appId);
+            var currentlyRunning = _games.FirstOrDefault(g => g.Status == GameStatus.Playing && g.AppId != appId);
             if (currentlyRunning != null)
             {
                 await IdleService.StopAsync(currentlyRunning.AppId);
-                await SchedulerService.StopAsync(currentlyRunning.AppId);
                 Snackbar.Add($"Stopped {currentlyRunning.NameI18n ?? currentlyRunning.Name}", Severity.Info);
             }
 
-            var game = _games.FirstOrDefault(g => g.AppId == appId);
-            if (game != null)
-                _ = Task.Run(() => AchievementService.LoadAchievementsAsync(game.Id, appId));
             await IdleService.StartAsync(appId);
-            await SchedulerService.StartAsync(appId);
             await RefreshAsync();
             Snackbar.Add("Game started", Severity.Success);
         }
@@ -390,7 +308,6 @@ else
     async Task StopGame(int appId)
     {
         await IdleService.StopAsync(appId);
-        await SchedulerService.StopAsync(appId);
         await RefreshAsync();
         Snackbar.Add("Game stopped", Severity.Info);
     }
@@ -415,7 +332,7 @@ else
                 {
                     if (language == "english") { existing.Name = name; existing.NameI18n = null; }
                     else existing.NameI18n = name;
-                    existing.TotalPlayMinutes = playtimeMinutes;
+                    existing.SteamPlaytimeAtRefresh = playtimeMinutes;
                 }
                 else
                 {
@@ -424,7 +341,7 @@ else
                         AppId = appId,
                         Name = name,
                         NameI18n = language != "english" ? name : null,
-                        TotalPlayMinutes = playtimeMinutes,
+                        SteamPlaytimeAtRefresh = playtimeMinutes,
                     });
                     added++;
                 }
@@ -453,7 +370,7 @@ else
 
     Color StatusColor(GameStatus s) => s switch
     {
-        GameStatus.Running => Color.Success,
+        GameStatus.Playing => Color.Success,
         GameStatus.Completed => Color.Info,
         _ => Color.Default
     };

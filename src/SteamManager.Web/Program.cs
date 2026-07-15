@@ -43,16 +43,13 @@ builder.Services.AddSingleton<AchievementHandler>();
 builder.Services.AddSingleton<AchievementUnlockNotifier>();
 builder.Services.AddSingleton<ISteamSessionService, SteamSessionService>();
 builder.Services.AddSingleton<IGameIdleService, GameIdleService>();
-builder.Services.AddSingleton<IUnlockSchedulerService, UnlockSchedulerService>();
-builder.Services.AddScoped<IAchievementDataService, AchievementDataService>();
+builder.Services.AddHostedService<UnlockSchedulerService>();
+builder.Services.AddSingleton<IGameQueueService, GameQueueService>();
+builder.Services.AddScoped<IGameRefreshService, GameRefreshService>();
 builder.Services.AddScoped<StartupRecoveryService>();
 builder.Services.AddSingleton<SyncBackgroundService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncBackgroundService>());
 builder.Services.AddSingleton<ISyncService>(sp => sp.GetRequiredService<SyncBackgroundService>());
-
-builder.Services.AddSingleton<PlayQueueService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<PlayQueueService>());
-builder.Services.AddSingleton<IPlayQueueService>(sp => sp.GetRequiredService<PlayQueueService>());
 
 // HTTP clients
 builder.Services.AddSingleton<PlaywrightBrowserService>();
@@ -107,19 +104,44 @@ using (var scope = app.Services.CreateScope())
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
     await db.Database.ExecuteSqlRawAsync(@"
-        CREATE TABLE IF NOT EXISTS play_queue (
-            Id INT NOT NULL AUTO_INCREMENT,
-            GameId INT NOT NULL,
-            SortOrder INT NOT NULL DEFAULT 0,
-            SavedSessionMinutes INT NOT NULL DEFAULT 0,
-            IsActive TINYINT(1) NOT NULL DEFAULT 0,
-            AddedAt DATETIME(6) NOT NULL,
-            PRIMARY KEY (Id),
-            UNIQUE KEY IX_play_queue_GameId (GameId),
-            KEY IX_play_queue_SortOrder (SortOrder),
-            CONSTRAINT FK_play_queue_game_GameId
-                FOREIGN KEY (GameId) REFERENCES game (Id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS game_queue (
+            id INT NOT NULL AUTO_INCREMENT,
+            game_id INT NOT NULL,
+            position INT NOT NULL DEFAULT 0,
+            added_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY IX_game_queue_game_id (game_id),
+            KEY IX_game_queue_position (position),
+            CONSTRAINT FK_game_queue_game_game_id
+                FOREIGN KEY (game_id) REFERENCES game (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    await db.Database.ExecuteSqlRawAsync(@"
+        CREATE TABLE IF NOT EXISTS game_reference_player (
+            id INT NOT NULL AUTO_INCREMENT,
+            game_id INT NOT NULL,
+            player_url VARCHAR(512) NOT NULL,
+            override_burst_check TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY IX_game_reference_player_game_id (game_id),
+            CONSTRAINT FK_game_reference_player_game_game_id
+                FOREIGN KEY (game_id) REFERENCES game (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Add new game columns (ignore if already exists)
+    foreach (var ddl in new[]
+    {
+        "ALTER TABLE game ADD COLUMN steam_playtime_at_refresh INT NOT NULL DEFAULT 0",
+        "ALTER TABLE game ADD COLUMN target_minutes INT NULL",
+        "ALTER TABLE game ADD COLUMN session_started_at DATETIME(6) NULL",
+        "ALTER TABLE achievement ADD COLUMN scheduled_unlock_at DATETIME(6) NULL",
+    })
+    {
+        try { await db.Database.ExecuteSqlRawAsync(ddl); }
+        catch (Exception) { /* column already exists — ignore */ }
+    }
 }
 
 // Startup recovery — run in background so Kestrel starts immediately
