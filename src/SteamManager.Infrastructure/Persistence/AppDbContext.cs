@@ -9,7 +9,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Game> Games => Set<Game>();
     public DbSet<Achievement> Achievements => Set<Achievement>();
     public DbSet<SteamAuditLog> SteamAuditLogs => Set<SteamAuditLog>();
-    public DbSet<PlayQueueItem> PlayQueueItems => Set<PlayQueueItem>();
+    public DbSet<GameQueueEntry> GameQueue => Set<GameQueueEntry>();
+    public DbSet<GameReferencePlayer> GameReferencePlayers => Set<GameReferencePlayer>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -34,7 +35,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.ToTable("achievement");
             e.HasIndex(x => new { x.GameId, x.ApiName }).IsUnique();
-            e.HasIndex(x => new { x.GameId, x.IsUnlocked, x.UnlockOffsetMinutes });
+            e.HasIndex(x => new { x.IsUnlocked, x.ScheduledUnlockAt });  // for global scanner
             e.HasOne(x => x.Game).WithMany(g => g.Achievements)
              .HasForeignKey(x => x.GameId);
             e.Property(x => x.CreatedAt).ValueGeneratedOnAdd();
@@ -52,17 +53,28 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.Source, x.Operation });
         });
 
-        mb.Entity<PlayQueueItem>(e =>
+        mb.Entity<GameQueueEntry>(e =>
         {
-            e.ToTable("play_queue");
+            e.ToTable("game_queue");
             e.HasOne(x => x.Game).WithMany()
              .HasForeignKey(x => x.GameId)
              .OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => x.GameId).IsUnique();
-            e.HasIndex(x => x.SortOrder);
+            e.HasIndex(x => x.Position);
         });
 
-        // Apply snake_case column naming to all entities
+        mb.Entity<GameReferencePlayer>(e =>
+        {
+            e.ToTable("game_reference_player");
+            e.HasOne(x => x.Game).WithOne(g => g.ReferencePlayer)
+             .HasForeignKey<GameReferencePlayer>(x => x.GameId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.GameId).IsUnique();
+            e.Property(x => x.PlayerUrl).HasMaxLength(512);
+            e.Property(x => x.CreatedAt).ValueGeneratedOnAdd();
+            e.Property(x => x.UpdatedAt).ValueGeneratedOnAddOrUpdate();
+        });
+
         foreach (var entity in mb.Model.GetEntityTypes())
             foreach (var property in entity.GetProperties())
                 property.SetColumnName(ToSnakeCase(property.Name));
