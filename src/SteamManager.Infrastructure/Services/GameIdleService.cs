@@ -16,9 +16,14 @@ public class GameIdleService : IGameIdleService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<GameIdleService> _logger;
     private readonly Dictionary<int, CancellationTokenSource> _running = [];
+
+    public event Action<int>? MctReached;
     public event Action<int, int>? ProgressUpdated;
 
-    public GameIdleService(SteamClientWrapper steam, IServiceScopeFactory scopeFactory, ILogger<GameIdleService> logger)
+    public IReadOnlyList<int> PlayingAppIds => [.. _running.Keys];
+
+    public GameIdleService(SteamClientWrapper steam, IServiceScopeFactory scopeFactory,
+        ILogger<GameIdleService> logger)
     {
         _steam = steam;
         _scopeFactory = scopeFactory;
@@ -40,6 +45,9 @@ public class GameIdleService : IGameIdleService
     public async Task StartAsync(int appId, CancellationToken ct = default)
     {
         if (_running.ContainsKey(appId)) return;
+        if (_running.Count >= 2)
+            throw new InvalidOperationException(
+                "Max 2 concurrent games. Stop a playing game before starting another.");
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -47,21 +55,16 @@ public class GameIdleService : IGameIdleService
         var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId, ct)
             ?? throw new InvalidOperationException($"Game {appId} not found");
 
-        var wasCompleted = game.Status == GameStatus.Completed;
-        game.Status = GameStatus.Running;
-        game.LastSessionStart = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
-
-        // If manually restarted after completing, idle indefinitely (user chose to keep going)
-        var targetMinutes = wasCompleted
-            ? int.MaxValue
-            : Math.Max(600, game.ReferencePlayMinutes ?? 0);
+        // SessionStartedAt, SteamPlaytimeAtRefresh, and Status = Playing must be set by
+        // caller (GameQueueService.StartGameFromQueueAsync or StartupRecoveryService) before calling here.
+        var targetMinutes = game.TargetMinutes;
+        var steamPlaytimeAtRefresh = game.SteamPlaytimeAtRefresh;
 
         SendGamesPlayed(appId);
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running[appId] = cts;
-        _ = RunIdleLoopAsync(appId, targetMinutes, cts.Token);
+        _ = RunIdleLoopAsync(appId, targetMinutes, steamPlaytimeAtRefresh, cts.Token);
     }
 
     public async Task StopAsync(int appId)
@@ -72,16 +75,23 @@ public class GameIdleService : IGameIdleService
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
+        var game = await db.Games
+            .Include(g => g.Achievements)
+            .FirstOrDefaultAsync(g => g.AppId == appId);
         if (game != null)
         {
             game.Status = GameStatus.Idle;
+            game.SessionStartedAt = null;
+            // Clear pending schedules — must re-Refresh before queuing again
+            foreach (var ach in game.Achievements.Where(a => !a.IsUnlocked))
+                ach.ScheduledUnlockAt = null;
             await db.SaveChangesAsync();
         }
         SendGamesPlayed(0);
     }
 
-    private async Task RunIdleLoopAsync(int appId, int targetMinutes, CancellationToken ct)
+    private async Task RunIdleLoopAsync(
+        int appId, int? targetMinutes, int steamPlaytimeAtRefresh, CancellationToken ct)
     {
         try
         {
@@ -93,24 +103,26 @@ public class GameIdleService : IGameIdleService
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 var game = await db.Games.FirstAsync(g => g.AppId == appId, ct);
-                game.TotalPlayMinutes++;
-                await db.SaveChangesAsync(ct);
-                ProgressUpdated?.Invoke(appId, game.TotalPlayMinutes);
+                if (!game.SessionStartedAt.HasValue) continue;
 
-                if (game.TotalPlayMinutes >= targetMinutes)
-                {
-                    var allUnlocked = !await db.Achievements
-                        .AnyAsync(a => a.GameId == game.Id && !a.IsUnlocked, ct);
-                    if (allUnlocked)
-                    {
-                        game.Status = GameStatus.Completed;
-                        await db.SaveChangesAsync(ct);
-                        SendGamesPlayed(0);
-                        _running.Remove(appId);
-                        _logger.LogInformation("Game {AppId}: all achievements unlocked, idle complete", appId);
-                        return;
-                    }
-                }
+                var elapsedMinutes = (int)(DateTime.UtcNow - game.SessionStartedAt.Value).TotalMinutes;
+                ProgressUpdated?.Invoke(appId, elapsedMinutes);
+
+                if (!targetMinutes.HasValue) continue;
+
+                var requiredMinutes = targetMinutes.Value - steamPlaytimeAtRefresh;
+                if (elapsedMinutes < requiredMinutes) continue;
+
+                // MCT reached — stop sending games played, transition to Scheduled
+                game.Status = GameStatus.Scheduled;
+                await db.SaveChangesAsync(ct);
+
+                SendGamesPlayed(0);
+                _running.Remove(appId);
+                _logger.LogInformation("Game {AppId}: MCT reached ({Elapsed}/{Required}min) → Scheduled",
+                    appId, elapsedMinutes, requiredMinutes);
+                MctReached?.Invoke(appId);
+                return;
             }
         }
         catch (OperationCanceledException) { }
