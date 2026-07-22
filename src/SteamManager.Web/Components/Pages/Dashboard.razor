@@ -348,9 +348,7 @@ else
 
     private async Task StopQueue()
     {
-        var playing = _queue.Where(q => q.Status == GameStatus.Playing).ToList();
-        foreach (var item in playing)
-            await QueueService.RemoveFromQueueAsync(item.GameId);
+        await QueueService.PauseQueueAsync();
         await ReloadAsync();
         StateHasChanged();
     }

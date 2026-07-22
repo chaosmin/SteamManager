@@ -95,7 +95,7 @@ public partial class GameRefreshService(
             ?? throw new InvalidOperationException(
                 "No reference player configured. Add one in the game detail page first.");
 
-        // 3. Force reset: clear all achievements before re-scheduling
+        // 3. Force reset: clear all achievements + reset game state before re-scheduling
         if (forceReset)
         {
             var achToReset = await db.Achievements.Where(a => a.GameId == gameId).ToListAsync(ct);
@@ -105,6 +105,9 @@ public partial class GameRefreshService(
                 a.UnlockedAt = null;
                 a.ScheduledUnlockAt = null;
             }
+            // Reset game status so the queue can pick it up again (e.g. was Completed)
+            game.Status = GameStatus.Idle;
+            game.SessionStartedAt = null;
             await db.SaveChangesAsync(ct);
         }
 

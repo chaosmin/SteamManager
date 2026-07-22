@@ -17,6 +17,7 @@ public interface IGameQueueService
     Task AddToQueueAsync(int gameId);
     Task RemoveFromQueueAsync(int gameId);
     Task StartQueueAsync(CancellationToken ct = default);
+    Task PauseQueueAsync(CancellationToken ct = default);
     Task AdvanceQueueAsync(int completedAppId, CancellationToken ct = default);
     Task ReorderAsync(int gameId, int newPosition, CancellationToken ct = default);
 }

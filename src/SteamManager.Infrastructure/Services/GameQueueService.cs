@@ -70,6 +70,19 @@ public class GameQueueService : IGameQueueService
         _logger.LogInformation("GameQueue: game {GameId} removed", gameId);
     }
 
+    public async Task PauseQueueAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var playing = await db.GameQueue
+            .Include(q => q.Game)
+            .Where(q => q.Game.Status == GameStatus.Playing)
+            .ToListAsync(ct);
+        foreach (var item in playing)
+            await _idleService.StopAsync(item.Game.AppId);
+        _logger.LogInformation("GameQueue: paused {Count} playing game(s)", playing.Count);
+    }
+
     public async Task StartQueueAsync(CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();

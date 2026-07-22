@@ -6,9 +6,11 @@
 @inject IGameIdleService IdleService
 @inject IGameRefreshService RefreshService
 @inject ISnackbar Snackbar
+@inject SteamWebApiClient SteamApi
 @using SteamManager.Core.Services
 @using SteamManager.Infrastructure.Persistence
 @using SteamManager.Infrastructure.Steam
+@using SteamManager.Infrastructure.Http
 @using SteamManager.Core.Models
 @using Microsoft.EntityFrameworkCore
 
@@ -34,28 +36,96 @@ else
 
     <MudBreadcrumbs Items="_breadcrumbs" Class="mb-2 px-0" />
 
-    <!-- Game header -->
-    <div style="position:relative;margin-bottom:24px">
-        <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(_game.AppId)/header.jpg"
-             style="width:100%;max-width:460px;border-radius:8px;display:block"
-             onerror="this.style.display='none'" />
+    <!-- Game header — hero banner -->
+    <div style="position:relative;width:100%;border-radius:12px;overflow:hidden;margin-bottom:20px;background:linear-gradient(135deg,#0d1b2a,#1a2332)">
+        <div style="aspect-ratio:460/215;position:relative">
+            <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/@(_game.AppId)/header.jpg"
+                 style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block"
+                 onerror="this.style.display='none'" />
+            <div style="position:absolute;inset:0;background:linear-gradient(to top,rgba(2,6,23,0.92) 0%,rgba(2,6,23,0.45) 55%,transparent 100%)"></div>
+            <div style="position:absolute;bottom:0;left:0;right:0;padding:14px 18px">
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudChip T="string" Size="Size.Small"
+                             Style="@($"background:{StatusHex(_game.Status)};color:#fff;font-size:0.7rem;height:22px")">
+                        @_game.Status
+                    </MudChip>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.OpenInNew"
+                               Style="color:rgba(255,255,255,0.75);border-color:rgba(255,255,255,0.3);font-size:0.72rem;height:26px;min-width:0"
+                               Href="@($"https://store.steampowered.com/app/{_game.AppId}")" Target="_blank">
+                        Steam Store
+                    </MudButton>
+                    @if (_total > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.EmojiEvents"
+                                   Style="color:rgba(255,255,255,0.75);border-color:rgba(255,255,255,0.3);font-size:0.72rem;height:26px;min-width:0"
+                                   Href="@($"https://steamhunters.com/apps/{_game.AppId}/users?sort=achievements")" Target="_blank">
+                            SteamHunters
+                        </MudButton>
+                    }
+                </div>
+                <MudText Typo="Typo.h5" Style="color:#fff;font-weight:700;text-shadow:0 2px 8px rgba(0,0,0,0.9);line-height:1.2">
+                    @(_game.NameI18n ?? _game.Name)
+                </MudText>
+            </div>
+        </div>
     </div>
 
-    <div class="mb-1">
-        <MudText Typo="Typo.h4">@(_game.NameI18n ?? _game.Name)</MudText>
-    </div>
-    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6)" Class="mb-4">
-        App ID: @_game.AppId &nbsp;|&nbsp;
-        Idle time: @($"{_game.SteamPlaytimeAtRefresh / 60.0:F1}h") / @(_game.TargetMinutes.HasValue ? $"{_game.TargetMinutes.Value / 60.0:F2}h" : "10h")
+    <!-- Stats strip -->
+    <div class="d-flex flex-wrap gap-3 mb-4">
+        <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;min-width:120px">
+            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.4);display:block;margin-bottom:2px">Playtime</MudText>
+            <MudText Typo="Typo.body1" Style="font-weight:600">@($"{_game.SteamPlaytimeAtRefresh / 60.0:F1}h")</MudText>
+        </div>
+        <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;min-width:120px">
+            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.4);display:block;margin-bottom:2px">Target</MudText>
+            <MudText Typo="Typo.body1" Style="font-weight:600">@(_game.TargetMinutes.HasValue ? $"{_game.TargetMinutes.Value / 60.0:F1}h" : "10h")</MudText>
+        </div>
         @if (_total > 0)
         {
-            <span> &nbsp;|&nbsp; Achievements: @_unlocked / @_total unlocked</span>
+            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;min-width:120px">
+                <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.4);display:block;margin-bottom:2px">Achievements</MudText>
+                <MudText Typo="Typo.body1" Style="font-weight:600">
+                    @_unlocked <span style="color:rgba(255,255,255,0.35);font-size:0.85rem">/ @_total</span>
+                </MudText>
+            </div>
         }
+        <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;min-width:100px">
+            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.4);display:block;margin-bottom:2px">App ID</MudText>
+            <MudText Typo="Typo.body2" Style="font-weight:500;color:rgba(255,255,255,0.65);font-family:monospace">@_game.AppId</MudText>
+        </div>
         @if (_game.AchievementsCachedAt.HasValue)
         {
-            <span> &nbsp;|&nbsp; Last synced: @FormatTime(_game.AchievementsCachedAt.Value)</span>
+            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;min-width:130px">
+                <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.4);display:block;margin-bottom:2px">Last Synced</MudText>
+                <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.65)">@FormatTime(_game.AchievementsCachedAt.Value, "MM-dd HH:mm")</MudText>
+            </div>
         }
-    </MudText>
+    </div>
+
+    <!-- Store description + tags (loaded async) -->
+    @if (_storeDetails != null)
+    {
+        @if (!string.IsNullOrWhiteSpace(_storeDetails.ShortDescription))
+        {
+            <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6);line-height:1.65;margin-bottom:12px">
+                @_storeDetails.ShortDescription
+            </MudText>
+        }
+        @if (_storeDetails.Tags.Length > 0)
+        {
+            <div class="d-flex flex-wrap gap-1 mb-4">
+                @foreach (var tag in _storeDetails.Tags)
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                             Style="color:rgba(255,255,255,0.5);border-color:rgba(255,255,255,0.15);font-size:0.7rem;height:22px">
+                        @tag
+                    </MudChip>
+                }
+            </div>
+        }
+    }
 
     <!-- Reference Player Panel -->
     <MudExpansionPanel @bind-IsExpanded="_playerPanelExpanded" Dense="true" Class="mb-4">
@@ -83,20 +153,23 @@ else
                 <MudAlert Severity="@(_playerError.Contains("Burst") ? Severity.Warning : Severity.Error)"
                           Dense="true" Class="mb-3">@_playerError</MudAlert>
             }
-            <MudTextField @bind-Value="_playerUrl" Label="SteamHunters Player URL"
-                          Variant="Variant.Outlined" FullWidth="true" Class="mb-3"
-                          Placeholder="https://steamhunters.com/profiles/76561198012345678"
-                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link" />
-            <MudCheckBox @bind-Value="_overrideBurst" Dense="true" Class="mb-3"
-                         Label="Override burst detection" />
-            <div class="d-flex flex-wrap gap-2 mt-3 mb-4">
+            <div class="d-flex align-center gap-2 mb-3">
+                <MudTextField @bind-Value="_playerUrl" Label="SteamHunters Player URL"
+                              Variant="Variant.Outlined" Style="flex:1"
+                              Placeholder="https://steamhunters.com/profiles/76561198012345678"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link" />
+                <MudTooltip Text="Override burst detection — allow scheduling even if reference player unlocked ≥5 achievements at the same timestamp">
+                    <div class="d-flex align-center gap-1" style="cursor:pointer;white-space:nowrap">
+                        <MudCheckBox @bind-Value="_overrideBurst" Dense="true" />
+                        <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small"
+                                 Style="color:rgba(255,255,255,0.35)" />
+                    </div>
+                </MudTooltip>
+            </div>
+            <div class="d-flex flex-wrap gap-2 mb-4">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePlayer">Save</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Warning"
                            Disabled="@(!_hasPlayer)" OnClick="ForceRefreshGame">Force Replay</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.OpenInNew"
-                           Href="@($"https://steamhunters.com/apps/{_game?.AppId}/users?sort=achievements")"
-                           Target="_blank">SteamHunters</MudButton>
                 @if (_hasPlayer)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemovePlayer">
@@ -240,6 +313,8 @@ else
     bool _loading;
     string? _loadError;
     string _timezone = "UTC";
+    string _language = "schinese";
+    SteamWebApiClient.AppStoreDetails? _storeDetails;
 
     // Reference player state
     private bool _hasPlayer;
@@ -260,6 +335,7 @@ else
     {
         var cfg = await Db.SteamConfigs.AsNoTracking().FirstOrDefaultAsync();
         _timezone = cfg?.DisplayTimezone ?? "UTC";
+        _language = cfg?.Language ?? "schinese";
 
         _game = await Db.Games.AsNoTracking()
             .Include(g => g.Achievements)
@@ -275,6 +351,15 @@ else
             await RefreshAchievementsAsync();
         else
             UpdateCounts();
+
+        _ = LoadStoreDetailsAsync();
+    }
+
+    private async Task LoadStoreDetailsAsync()
+    {
+        if (_game == null) return;
+        _storeDetails = await SteamApi.GetAppStoreDetailsAsync(_game.AppId, _language);
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task LoadReferencePlayerAsync()
@@ -377,7 +462,15 @@ else
         _unlocked = _game.Achievements.Count(a => a.IsUnlocked);
     }
 
-    string FormatTime(DateTime utc, string format = "yyyy-yyyy-MM-dd HH:mm")
+    string StatusHex(GameStatus s) => s switch
+    {
+        GameStatus.Playing   => "#22C55E",
+        GameStatus.Scheduled => "#3B82F6",
+        GameStatus.Completed => "#0891B2",
+        _                    => "#475569"
+    };
+
+    string FormatTime(DateTime utc, string format = "yyyy-MM-dd HH:mm")
     {
         try
         {

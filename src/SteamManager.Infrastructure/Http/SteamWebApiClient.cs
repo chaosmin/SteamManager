@@ -152,6 +152,48 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
         catch { return 0; }
     }
 
+    public record AppStoreDetails(string? ShortDescription, string[] Tags);
+
+    public async Task<AppStoreDetails> GetAppStoreDetailsAsync(int appId, string language = "english", CancellationToken ct = default)
+    {
+        try
+        {
+            var url = $"https://store.steampowered.com/api/appdetails?appids={appId}&filters=short_description,genres,categories&cc=us&l={language}";
+            var resp = await http.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode) return new AppStoreDetails(null, []);
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            var root = JsonDocument.Parse(json).RootElement;
+            if (!root.TryGetProperty(appId.ToString(), out var appNode) ||
+                !appNode.TryGetProperty("success", out var succ) || !succ.GetBoolean() ||
+                !appNode.TryGetProperty("data", out var data))
+                return new AppStoreDetails(null, []);
+
+            var shortDesc = data.TryGetProperty("short_description", out var sd) ? sd.GetString() : null;
+            var genres = data.TryGetProperty("genres", out var g)
+                ? g.EnumerateArray()
+                    .Select(x => x.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "")
+                    .Where(s => !string.IsNullOrEmpty(s)).ToArray()
+                : Array.Empty<string>();
+            var skipCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "Steam Cloud", "Remote Play Together", "Remote Play on TV", "Remote Play on Phone",
+                  "Remote Play on Tablet", "Steam Leaderboards", "Valve Anti-Cheat enabled", "Stats",
+                  "Steam Trading Cards", "Steam Workshop" };
+            var categories = data.TryGetProperty("categories", out var c)
+                ? c.EnumerateArray()
+                    .Select(x => x.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "")
+                    .Where(s => !string.IsNullOrEmpty(s) && !skipCategories.Contains(s))
+                    .Take(5).ToArray()
+                : Array.Empty<string>();
+
+            return new AppStoreDetails(shortDesc, genres.Concat(categories).Distinct().ToArray());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch store details for AppId {AppId}", appId);
+            return new AppStoreDetails(null, []);
+        }
+    }
+
     private async Task<string> FetchWithRetryAsync(string url, CancellationToken ct,
         string operation = "Unknown", int? appId = null)
     {

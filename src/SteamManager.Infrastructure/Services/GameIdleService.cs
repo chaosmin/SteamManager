@@ -75,16 +75,11 @@ public class GameIdleService : IGameIdleService
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var game = await db.Games
-            .Include(g => g.Achievements)
-            .FirstOrDefaultAsync(g => g.AppId == appId);
+        var game = await db.Games.FirstOrDefaultAsync(g => g.AppId == appId);
         if (game != null)
         {
             game.Status = GameStatus.Idle;
             game.SessionStartedAt = null;
-            // Clear pending schedules — must re-Refresh before queuing again
-            foreach (var ach in game.Achievements.Where(a => !a.IsUnlocked))
-                ach.ScheduledUnlockAt = null;
             await db.SaveChangesAsync();
         }
         SendGamesPlayed(0);

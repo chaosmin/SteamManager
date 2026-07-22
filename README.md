@@ -177,6 +177,15 @@ Images are published to [Docker Hub](https://hub.docker.com/r/chaosmin/steam-man
 
 ## Changelog
 
+### v0.4.1
+
+- **Bug fix** — Stop Queue now pauses (preserves queue entry) instead of permanently removing the game
+- **Bug fix** — Force Replay now correctly re-queues Completed games after reset
+- **Bug fix** — Queue Progress no longer empty after pause+resume (scheduled times preserved through pause)
+- **UI** — Games page filter bar redesigned: chip-based status + property filters, result count, Clear All button
+- **UI** — GameDetail redesigned: hero banner with cover art + gradient, stats strip, Steam description + tags (Simplified Chinese), SteamHunters button in hero
+- **Feature** — Steam Store description and tags integrated via `store.steampowered.com/api/appdetails`
+
 See [docs/changelog/](docs/changelog/) for full version history.
 
 ## Acknowledgements

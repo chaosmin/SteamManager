@@ -53,23 +53,58 @@
 else
 {
     <!-- Filter bar -->
-    <div class="d-flex align-center flex-wrap gap-4 mb-4">
-        <MudTextField @bind-Value="_search" Placeholder="Search games..." Variant="Variant.Outlined"
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                      Clearable="true" FullWidth="false" Style="min-width:240px" Dense="true"
-                      Immediate="true" />
-        <MudSelect @bind-Value="_sortOption" Dense="true" Variant="Variant.Outlined"
-                   Style="min-width:160px" Label="Sort by">
-            <MudSelectItem Value="SortOption.NameAsc">Name A→Z</MudSelectItem>
-            <MudSelectItem Value="SortOption.NameDesc">Name Z→A</MudSelectItem>
-            <MudSelectItem Value="SortOption.PlaytimeAsc">Playtime ↑</MudSelectItem>
-            <MudSelectItem Value="SortOption.PlaytimeDesc">Playtime ↓</MudSelectItem>
-            <MudSelectItem Value="SortOption.AchAsc">Achievements ↑</MudSelectItem>
-            <MudSelectItem Value="SortOption.AchDesc">Achievements ↓</MudSelectItem>
-        </MudSelect>
-        <MudSwitch @bind-Value="_onlyWithAchievements" Color="Color.Primary" Label="Has achievements" />
-        <MudSwitch @bind-Value="_onlyCompleted" Color="Color.Success" Label="100%" />
-        <MudSwitch @bind-Value="_onlyWithCardDrops" Color="Color.Warning" Label="Card drops remaining" />
+    <div class="mb-4">
+        <!-- Row 1: search + sort -->
+        <div class="d-flex align-center gap-3 mb-2" style="flex-wrap:wrap">
+            <MudTextField @bind-Value="_search" Placeholder="Search games..." Variant="Variant.Outlined"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Clearable="true" Style="flex:1;min-width:200px;max-width:380px" Dense="true" Immediate="true" />
+            <MudSelect @bind-Value="_sortOption" Dense="true" Variant="Variant.Outlined"
+                       Style="min-width:160px" Label="Sort">
+                <MudSelectItem Value="SortOption.NameAsc">Name A→Z</MudSelectItem>
+                <MudSelectItem Value="SortOption.NameDesc">Name Z→A</MudSelectItem>
+                <MudSelectItem Value="SortOption.PlaytimeAsc">Playtime ↑</MudSelectItem>
+                <MudSelectItem Value="SortOption.PlaytimeDesc">Playtime ↓</MudSelectItem>
+                <MudSelectItem Value="SortOption.AchAsc">Achievements ↑</MudSelectItem>
+                <MudSelectItem Value="SortOption.AchDesc">Achievements ↓</MudSelectItem>
+            </MudSelect>
+        </div>
+        <!-- Row 2: status chips | property chips | clear -->
+        <div class="d-flex align-center flex-wrap gap-2">
+            @foreach (var chip in _statusChips)
+            {
+                var active = _statusFilter == chip.Value;
+                <MudChip T="string" Size="Size.Small"
+                         Variant="@(active ? Variant.Filled : Variant.Outlined)"
+                         Color="@(active ? chip.ActiveColor : Color.Default)"
+                         Style="@(!active ? "color:rgba(255,255,255,0.55);border-color:rgba(255,255,255,0.18);cursor:pointer" : "cursor:pointer")"
+                         OnClick="@(() => _statusFilter = chip.Value)">@chip.Label</MudChip>
+            }
+            <div style="width:1px;height:20px;background:rgba(255,255,255,0.15);margin:0 2px;align-self:center"></div>
+            <MudChip T="string" Size="Size.Small"
+                     Variant="@(_onlyWithAchievements ? Variant.Filled : Variant.Outlined)"
+                     Color="@(_onlyWithAchievements ? Color.Primary : Color.Default)"
+                     Style="@(!_onlyWithAchievements ? "color:rgba(255,255,255,0.55);border-color:rgba(255,255,255,0.18);cursor:pointer" : "cursor:pointer")"
+                     OnClick="@(() => _onlyWithAchievements = !_onlyWithAchievements)">Has Achievements</MudChip>
+            <MudChip T="string" Size="Size.Small"
+                     Variant="@(_onlyCompleted ? Variant.Filled : Variant.Outlined)"
+                     Color="@(_onlyCompleted ? Color.Success : Color.Default)"
+                     Style="@(!_onlyCompleted ? "color:rgba(255,255,255,0.55);border-color:rgba(255,255,255,0.18);cursor:pointer" : "cursor:pointer")"
+                     OnClick="@(() => _onlyCompleted = !_onlyCompleted)">100% Done</MudChip>
+            <MudChip T="string" Size="Size.Small"
+                     Variant="@(_onlyWithCardDrops ? Variant.Filled : Variant.Outlined)"
+                     Color="@(_onlyWithCardDrops ? Color.Warning : Color.Default)"
+                     Style="@(!_onlyWithCardDrops ? "color:rgba(255,255,255,0.55);border-color:rgba(255,255,255,0.18);cursor:pointer" : "cursor:pointer")"
+                     OnClick="@(() => _onlyWithCardDrops = !_onlyWithCardDrops)">Card Drops</MudChip>
+            @if (HasActiveFilters)
+            {
+                <MudSpacer />
+                <MudButton Variant="Variant.Text" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.FilterAltOff"
+                           Style="color:rgba(255,255,255,0.4);font-size:0.75rem;min-height:28px"
+                           OnClick="ClearFilters">Clear</MudButton>
+            }
+        </div>
     </div>
 
     @if (_games.Count == 0)
@@ -91,14 +126,17 @@ else
     {
         var filtered = _games
             .Where(g => string.IsNullOrWhiteSpace(_search) ||
+                        (g.NameI18n ?? g.Name).Contains(_search, StringComparison.OrdinalIgnoreCase) ||
                         g.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
-            .Where(g => !_onlyWithAchievements || (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) > 0)
-            .Where(g =>
-            {
-                var s = _achStats.GetValueOrDefault(g.Id);
-                var allDone = s != null && s.Total > 0 && s.Unlocked == s.Total;
-                return _onlyCompleted ? allDone : !allDone;
+            .Where(g => _statusFilter switch {
+                "Playing"   => g.Status == GameStatus.Playing,
+                "Queued"    => g.Status == GameStatus.Idle && _queue.Any(q => q.GameId == g.Id),
+                "Scheduled" => g.Status == GameStatus.Scheduled,
+                "Completed" => g.Status == GameStatus.Completed,
+                _           => true
             })
+            .Where(g => !_onlyWithAchievements || (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) > 0)
+            .Where(g => !_onlyCompleted || (_achStats.GetValueOrDefault(g.Id) is { } s && s.Total > 0 && s.Unlocked == s.Total))
             .Where(g => !_onlyWithCardDrops || g.DropsRemaining > 0)
             .ToList();
 
@@ -112,6 +150,10 @@ else
             SortOption.AchDesc      => filtered.OrderByDescending(g => (_achStats.GetValueOrDefault(g.Id)?.Total ?? 0) - (_achStats.GetValueOrDefault(g.Id)?.Unlocked ?? 0)).ToList(),
             _                       => filtered,
         };
+
+        <div class="d-flex align-center mb-2">
+            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,0.35)">@filtered.Count game@(filtered.Count == 1 ? "" : "s")</MudText>
+        </div>
 
         @if (filtered.Count == 0)
         {
@@ -271,7 +313,7 @@ else
                                                        OnClick="@(() => RefreshGame(game.Id, game.AppId))" />
                                     </MudTooltip>
                                 }
-                                @if (achTotal > 0 && game.Status != GameStatus.Completed)
+                                @if (achTotal > 0)
                                 {
                                     <MudTooltip Text="Sync from Steam">
                                         <MudIconButton Icon="@Icons.Material.Filled.Sync" Size="Size.Small"
@@ -298,7 +340,16 @@ else
 
 @code {
     record AchievementStats(int Total, int Unlocked);
+    record StatusChip(string Value, string Label, Color ActiveColor);
     enum SortOption { NameAsc, NameDesc, PlaytimeAsc, PlaytimeDesc, AchAsc, AchDesc }
+
+    readonly StatusChip[] _statusChips = [
+        new("All",       "All",       Color.Default),
+        new("Playing",   "Playing",   Color.Success),
+        new("Queued",    "Queued",    Color.Warning),
+        new("Scheduled", "Scheduled", Color.Primary),
+        new("Completed", "Completed", Color.Info),
+    ];
 
     List<Game> _games = [];
     List<QueueEntry> _queue = [];
@@ -307,10 +358,24 @@ else
     bool _loading = true;
     bool _syncing;
     string _search = "";
+    string _statusFilter = "All";
     bool _onlyWithAchievements;
     bool _onlyCompleted;
     bool _onlyWithCardDrops;
     SortOption _sortOption = SortOption.NameAsc;
+
+    bool HasActiveFilters =>
+        _statusFilter != "All" || _onlyWithAchievements || _onlyCompleted ||
+        _onlyWithCardDrops || !string.IsNullOrWhiteSpace(_search);
+
+    void ClearFilters()
+    {
+        _search = "";
+        _statusFilter = "All";
+        _onlyWithAchievements = false;
+        _onlyCompleted = false;
+        _onlyWithCardDrops = false;
+    }
 
     int RemainingMinutes(Game g)
     {
