@@ -18,6 +18,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.ToTable("steam_config");
             e.Property(x => x.DisplayTimezone).HasDefaultValue("UTC");
+            e.Property(x => x.MaxConcurrentGames).HasDefaultValue(1);
             e.Property(x => x.CreatedAt).ValueGeneratedOnAdd();
             e.Property(x => x.UpdatedAt).ValueGeneratedOnAddOrUpdate();
         });

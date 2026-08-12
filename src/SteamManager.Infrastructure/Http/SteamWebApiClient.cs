@@ -9,7 +9,25 @@ namespace SteamManager.Infrastructure.Http;
 
 public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logger, ISteamAuditService audit)
 {
+    // Minimum spacing enforced between outgoing calls. Applied once, centrally, in
+    // FetchWithRetryAsync — if the previous call already took this long (e.g. due to
+    // network latency), no extra sleep is added on top of it.
     private static readonly TimeSpan CallDelay = TimeSpan.FromSeconds(1);
+    private static readonly SemaphoreSlim RateLimitLock = new(1, 1);
+    private static DateTime _lastCallUtc = DateTime.MinValue;
+
+    private static async Task ThrottleAsync(CancellationToken ct)
+    {
+        await RateLimitLock.WaitAsync(ct);
+        try
+        {
+            var wait = CallDelay - (DateTime.UtcNow - _lastCallUtc);
+            if (wait > TimeSpan.Zero)
+                await Task.Delay(wait, ct);
+            _lastCallUtc = DateTime.UtcNow;
+        }
+        finally { RateLimitLock.Release(); }
+    }
 
     // Strip ?key=... or &key=... from URLs before logging.
     private static readonly Regex KeyParam = new(@"[?&]key=[^&]*", RegexOptions.Compiled);
@@ -36,7 +54,6 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
                 a.TryGetProperty("description", out var desc) ? desc.GetString() : null))
             .ToList();
 
-        await Task.Delay(CallDelay, ct);
         var pctUrl = $"https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid={appId}";
         var pctJson = await FetchWithRetryAsync(pctUrl, ct, "GetGlobalAchievementPercentages", appId);
         var pctMap = JsonDocument.Parse(pctJson).RootElement
@@ -57,7 +74,6 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
     public async Task<List<SteamAchievementDto>> GetPlayerAchievementsAsync(
         long steamId, int appId, string apiKey, CancellationToken ct = default)
     {
-        await Task.Delay(CallDelay, ct);
         try
         {
             var url = $"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key={apiKey}&steamid={steamId}&appid={appId}";
@@ -119,7 +135,6 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
     {
         try
         {
-            await Task.Delay(CallDelay, ct);
             var url = $"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key={apiKey}&vanityurl={vanityUrl}";
             var json = await FetchWithRetryAsync(url, ct, "ResolveVanityURL");
             var resp = JsonDocument.Parse(json).RootElement.GetProperty("response");
@@ -140,7 +155,6 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
     {
         try
         {
-            await Task.Delay(CallDelay, ct);
             var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={apiKey}&steamid={steamId}&include_appinfo=0&include_played_free_games=1&appids_filter[0]={appId}";
             var json = await FetchWithRetryAsync(url, ct, "GetPlayerGamePlaytime", appId);
             var resp = JsonDocument.Parse(json).RootElement.GetProperty("response");
@@ -197,6 +211,8 @@ public class SteamWebApiClient(HttpClient http, ILogger<SteamWebApiClient> logge
     private async Task<string> FetchWithRetryAsync(string url, CancellationToken ct,
         string operation = "Unknown", int? appId = null)
     {
+        await ThrottleAsync(ct);
+
         var sw = Stopwatch.StartNew();
         var logUrl = StripKey(url);
         bool success = false;
