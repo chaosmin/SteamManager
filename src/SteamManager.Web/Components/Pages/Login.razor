@@ -14,7 +14,7 @@
             <form method="post" action="/api/login" data-enhance="false">
                 @if (ShowError)
                 {
-                    <MudAlert Severity="Severity.Error" Class="mb-3">Incorrect password</MudAlert>
+                    <MudAlert Severity="Severity.Error" Class="mb-3">@ErrorMessage</MudAlert>
                 }
                 <div class="mb-4">
                     <input type="password" name="password" placeholder="Access Password"
@@ -34,4 +34,7 @@
     public string? Error { get; set; }
 
     bool ShowError => !string.IsNullOrEmpty(Error);
+    string ErrorMessage => Error == "locked"
+        ? "Too many failed attempts. Try again in a few minutes."
+        : "Incorrect password";
 }

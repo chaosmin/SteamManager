@@ -43,9 +43,10 @@ public class UnlockSchedulerService(
             .OrderBy(a => a.ScheduledUnlockAt)
             .ToListAsync(ct);
 
-        if (due.Count > 0)
-            logger.LogInformation("UnlockScheduler: {Count} achievements due", due.Count);
+        if (due.Count == 0) return;
+        logger.LogInformation("UnlockScheduler: {Count} achievements due", due.Count);
 
+        var unlocked = new List<Achievement>();
         foreach (var ach in due)
         {
             if (ct.IsCancellationRequested) break;
@@ -60,7 +61,7 @@ public class UnlockSchedulerService(
             ach.IsUnlocked = true;
             ach.ScheduledUnlockAt = null;
             ach.UnlockedAt = await FetchSteamUnlockTimeAsync(scope, ach.AppId, ach.ApiName, ct) ?? now;
-            await db.SaveChangesAsync(ct);
+            unlocked.Add(ach);
 
             logger.LogInformation("Unlocked {ApiName} for game {AppId}", ach.ApiName, ach.AppId);
 
@@ -68,27 +69,34 @@ public class UnlockSchedulerService(
                 GameName: ach.Game.NameI18n ?? ach.Game.Name,
                 AchievementName: ach.DisplayNameI18n ?? ach.DisplayName,
                 IconUrl: ach.IconUrl));
+        }
 
-            // Check if Scheduled game is now fully complete
-            if (ach.Game.Status == GameStatus.Scheduled)
-            {
-                var anyPending = await db.Achievements
-                    .AnyAsync(a => a.GameId == ach.GameId && !a.IsUnlocked, ct);
-                if (!anyPending)
-                {
-                    ach.Game.Status = GameStatus.Completed;
-                    await db.SaveChangesAsync(ct);
-                    var queueSvc = scope.ServiceProvider.GetRequiredService<IGameQueueService>();
-                    await queueSvc.RemoveFromQueueAsync(ach.GameId);
-                    logger.LogInformation("Game {AppId} fully completed", ach.AppId);
+        if (unlocked.Count == 0) return;
+        await db.SaveChangesAsync(ct); // one write for every achievement unlocked this tick
 
-                    var totalCount = await db.Achievements
-                        .CountAsync(a => a.GameId == ach.GameId, ct);
-                    notifier.NotifyCompleted(new CompletedGameInfo(
-                        GameName: ach.Game.NameI18n ?? ach.Game.Name,
-                        AchievementCount: totalCount));
-                }
-            }
+        // Now that unlocks are persisted, check completion for each distinct Scheduled game touched.
+        var scheduledGameIds = unlocked
+            .Where(a => a.Game.Status == GameStatus.Scheduled)
+            .Select(a => a.GameId)
+            .Distinct();
+
+        foreach (var gameId in scheduledGameIds)
+        {
+            var anyPending = await db.Achievements.AnyAsync(a => a.GameId == gameId && !a.IsUnlocked, ct);
+            if (anyPending) continue;
+
+            var game = unlocked.First(a => a.GameId == gameId).Game;
+            game.Status = GameStatus.Completed;
+            await db.SaveChangesAsync(ct);
+
+            var queueSvc = scope.ServiceProvider.GetRequiredService<IGameQueueService>();
+            await queueSvc.RemoveFromQueueAsync(gameId);
+            logger.LogInformation("Game {AppId} fully completed", game.AppId);
+
+            var totalCount = await db.Achievements.CountAsync(a => a.GameId == gameId, ct);
+            notifier.NotifyCompleted(new CompletedGameInfo(
+                GameName: game.NameI18n ?? game.Name,
+                AchievementCount: totalCount));
         }
     }
 

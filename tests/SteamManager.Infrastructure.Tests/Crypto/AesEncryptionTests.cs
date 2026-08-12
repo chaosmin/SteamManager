@@ -38,4 +38,14 @@ public class AesEncryptionTests
         Assert.Throws<ArgumentException>(() => AesEncryption.Encrypt("", Key));
         Assert.Throws<ArgumentException>(() => AesEncryption.Encrypt("data", ""));
     }
+
+    [Fact]
+    public void Decrypt_TamperedCiphertext_ThrowsInsteadOfReturningCorruptedData()
+    {
+        var encrypted = AesEncryption.Encrypt("integrity-check", Key);
+        var bytes = Convert.FromBase64String(encrypted);
+        bytes[^1] ^= 0xFF; // flip a byte in the ciphertext
+        var tampered = Convert.ToBase64String(bytes);
+        Assert.ThrowsAny<Exception>(() => AesEncryption.Decrypt(tampered, Key));
+    }
 }

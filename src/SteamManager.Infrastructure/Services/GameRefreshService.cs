@@ -36,26 +36,7 @@ public partial class GameRefreshService(
         if (!session.SteamId64.HasValue)
             throw new InvalidOperationException("Not logged in to Steam.");
 
-        // Fetch current playtime
-        var currentPlaytime = await steamApi.GetPlayerGamePlaytimeAsync(
-            (long)session.SteamId64.Value, appId, apiKey, ct);
-        if (currentPlaytime > 0)
-            game.SteamPlaytimeAtRefresh = currentPlaytime;
-
-        // Sync achievement unlock status from Steam
-        var myAchs = await steamApi.GetPlayerAchievementsAsync(
-            (long)session.SteamId64.Value, appId, apiKey, ct);
-        var myMap = myAchs.ToDictionary(a => a.ApiName);
-        var achievements = await db.Achievements.Where(a => a.GameId == gameId).ToListAsync(ct);
-        foreach (var row in achievements)
-        {
-            if (!row.IsUnlocked && myMap.TryGetValue(row.ApiName, out var p) && p.UnlockTime.HasValue)
-            {
-                row.IsUnlocked = true;
-                row.UnlockedAt = DateTimeOffset.FromUnixTimeSeconds(p.UnlockTime.Value).UtcDateTime;
-                row.ScheduledUnlockAt = null;
-            }
-        }
+        var achievements = await SyncOwnAchievementsAsync(db, game, appId, apiKey, ct);
 
         // Check completion: playtime goal met AND all achievements unlocked
         var targetMet = game.TargetMinutes.HasValue && game.SteamPlaytimeAtRefresh >= game.TargetMinutes.Value;
@@ -211,27 +192,7 @@ public partial class GameRefreshService(
         }
 
         // 13. Sync own unlock status from Steam + refresh current playtime
-        if (session.SteamId64.HasValue)
-        {
-            var myAchs = await steamApi.GetPlayerAchievementsAsync(
-                (long)session.SteamId64.Value, appId, apiKey, ct);
-            var myMap = myAchs.ToDictionary(a => a.ApiName);
-            var rows = await db.Achievements.Where(a => a.GameId == gameId).ToListAsync(ct);
-            foreach (var row in rows)
-            {
-                if (myMap.TryGetValue(row.ApiName, out var p) && p.UnlockTime.HasValue)
-                {
-                    row.IsUnlocked = true;
-                    row.UnlockedAt = DateTimeOffset.FromUnixTimeSeconds(p.UnlockTime.Value).UtcDateTime;
-                    row.ScheduledUnlockAt = null;
-                }
-            }
-
-            var currentPlaytime = await steamApi.GetPlayerGamePlaytimeAsync(
-                (long)session.SteamId64.Value, appId, apiKey, ct);
-            if (currentPlaytime > 0)
-                game.SteamPlaytimeAtRefresh = currentPlaytime;
-        }
+        await SyncOwnAchievementsAsync(db, game, appId, apiKey, ct);
 
         game.AchievementsCachedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
@@ -241,6 +202,38 @@ public partial class GameRefreshService(
 
         logger.LogInformation("Refresh complete: game {GameId} ({AppId}), {Count} achievements scheduled",
             gameId, appId, scheduleMap.Count);
+    }
+
+    /// <summary>
+    /// Pulls the logged-in user's own achievement unlock status + current playtime from Steam
+    /// and applies them to the tracked entities. No-op (beyond returning current rows) if not logged in.
+    /// Shared by SyncAsync and RefreshCoreAsync to avoid duplicating this Steam call + update loop.
+    /// </summary>
+    private async Task<List<Achievement>> SyncOwnAchievementsAsync(
+        AppDbContext db, Game game, int appId, string apiKey, CancellationToken ct)
+    {
+        var achievements = await db.Achievements.Where(a => a.GameId == game.Id).ToListAsync(ct);
+        if (!session.SteamId64.HasValue) return achievements;
+
+        var myAchs = await steamApi.GetPlayerAchievementsAsync(
+            (long)session.SteamId64.Value, appId, apiKey, ct);
+        var myMap = myAchs.ToDictionary(a => a.ApiName);
+        foreach (var row in achievements)
+        {
+            if (!row.IsUnlocked && myMap.TryGetValue(row.ApiName, out var p) && p.UnlockTime.HasValue)
+            {
+                row.IsUnlocked = true;
+                row.UnlockedAt = DateTimeOffset.FromUnixTimeSeconds(p.UnlockTime.Value).UtcDateTime;
+                row.ScheduledUnlockAt = null;
+            }
+        }
+
+        var currentPlaytime = await steamApi.GetPlayerGamePlaytimeAsync(
+            (long)session.SteamId64.Value, appId, apiKey, ct);
+        if (currentPlaytime > 0)
+            game.SteamPlaytimeAtRefresh = currentPlaytime;
+
+        return achievements;
     }
 
     // Extract numeric Steam64 ID from URLs like:

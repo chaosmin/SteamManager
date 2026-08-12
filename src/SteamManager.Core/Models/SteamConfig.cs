@@ -8,6 +8,8 @@ public class SteamConfig
     public string? WebApiKey { get; set; }
     public string? SessionToken { get; set; }        // AES-256 encrypted RefreshToken
     public DateTime? SessionUpdatedAt { get; set; }  // UTC
+    public string? UiSessionTokenHash { get; set; }   // SHA-256 hex of the random UI login cookie token
+    public DateTime? UiSessionIssuedAt { get; set; }  // UTC; used for expiry + revoking on re-login
     public string DisplayTimezone { get; set; } = "UTC";
     public string SyncCron { get; set; } = "0 0 * * *"; // default: daily at midnight
     public string Language { get; set; } = "english";   // steam API language: english / schinese

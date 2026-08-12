@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using Serilog;
+using SteamManager.Core.Models;
 using SteamManager.Core.Services;
 using SteamManager.Infrastructure.Http;
 using SteamManager.Infrastructure.Services;
@@ -130,20 +133,40 @@ app.UseAntiforgery();
 
 // Minimal API login endpoint — sets auth cookie and redirects
 // (HttpContext is unavailable in Blazor 8 Interactive Server rendering)
-app.MapPost("/api/login", (HttpContext ctx, IConfiguration cfg) =>
+// Simple in-memory per-IP throttle: 5 failed attempts locks that IP out for 5 minutes.
+var loginAttempts = new System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTime LockedUntil)>();
+app.MapPost("/api/login", async (HttpContext ctx, IConfiguration cfg, AppDbContext db) =>
 {
+    var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    if (loginAttempts.TryGetValue(ip, out var attempt) && attempt.LockedUntil > DateTime.UtcNow)
+        return Results.Redirect("/login?error=locked");
+
     var password = cfg["UI_ACCESS_PASSWORD"]
         ?? Environment.GetEnvironmentVariable("UI_ACCESS_PASSWORD") ?? "";
     var input = ctx.Request.Form["password"].ToString();
-    var expected = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(password);
-    var inputHash = SteamManager.Web.Middleware.UiAuthMiddleware.Hash(input);
-    if (inputHash == expected)
+
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(input), Encoding.UTF8.GetBytes(password)))
     {
-        ctx.Response.Cookies.Append("ui_auth", expected,
-            new CookieOptions { Expires = DateTimeOffset.UtcNow.AddDays(30), HttpOnly = true, SameSite = SameSiteMode.Lax });
-        return Results.Redirect("/");
+        var count = attempt.Count + 1;
+        var lockedUntil = count >= 5 ? DateTime.UtcNow.AddMinutes(5) : DateTime.MinValue;
+        loginAttempts[ip] = (count, lockedUntil);
+        return Results.Redirect("/login?error=1");
     }
-    return Results.Redirect("/login?error=1");
+
+    loginAttempts.TryRemove(ip, out _);
+
+    // Issue a fresh random session token — invalidates any previously issued cookie immediately.
+    var token = UiAuthMiddleware.GenerateToken();
+    var sessionCfg = await db.SteamConfigs.FirstOrDefaultAsync() ?? new SteamConfig();
+    sessionCfg.UiSessionTokenHash = UiAuthMiddleware.HashToken(token);
+    sessionCfg.UiSessionIssuedAt = DateTime.UtcNow;
+    if (sessionCfg.Id == 0) db.SteamConfigs.Add(sessionCfg);
+    await db.SaveChangesAsync();
+
+    ctx.Response.Cookies.Append(UiAuthMiddleware.CookieName, token,
+        new CookieOptions { Expires = DateTimeOffset.UtcNow.AddDays(30), HttpOnly = true, SameSite = SameSiteMode.Lax });
+    return Results.Redirect("/");
 });
 
 app.MapRazorComponents<App>()
